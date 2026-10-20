@@ -43,6 +43,7 @@
 // ---------- Codigos de los sensores 433 MHz ----------
 // Se obtienen con la prueba inicial: abrir y cerrar cada sensor
 // mirando el monitor serie (el firmware imprime cada codigo recibido).
+// Con un solo sensor (puerta), dejar los de ventana en 0: se reporta "desconocido".
 #define RF_PUERTA_ABIERTA   0UL
 #define RF_PUERTA_CERRADA   0UL
 #define RF_VENTANA_ABIERTA  0UL

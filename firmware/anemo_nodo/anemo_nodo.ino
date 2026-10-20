@@ -333,7 +333,10 @@ void actualizarSalidas() {
   if (st.aire == "bueno")    color = led.Color(0, 150, 0);
   if (st.aire == "moderado") color = led.Color(180, 120, 0);
   if (st.aire == "malo")     color = led.Color(200, 0, 0);
-  bool alertaVentilar = st.aire == "malo" && st.puerta == 0 && st.ventana == 0;
+  // Alerta: aire malo, ninguna abertura conocida esta abierta y al menos una
+  // esta confirmada cerrada (funciona con 1 o 2 sensores magneticos).
+  bool alertaVentilar = st.aire == "malo" && st.puerta != 1 && st.ventana != 1 &&
+                        (st.puerta == 0 || st.ventana == 0);
   if (alertaVentilar && parpadeo) color = 0;
   // Solo se refresca si cambia el color: led.show() apaga las
   // interrupciones un instante y podria cortar una trama de 433 MHz.
