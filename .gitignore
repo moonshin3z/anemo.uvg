@@ -1,0 +1,8 @@
+firebase-key.json
+*.json.key
+.env
+*.db
+*.db-*
+mensajes.csv
+venv/
+__pycache__/
