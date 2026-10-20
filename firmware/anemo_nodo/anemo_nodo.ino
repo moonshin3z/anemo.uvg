@@ -1,5 +1,5 @@
 // =============================================================
-//  AireAula - Nodo IoT de calidad del aire (ESP32)
+//  Anemo - Nodo IoT de calidad del aire (ESP32)
 //  CC3108 Internet of Things - Proyecto Fase 03
 //
 //  Que hace este programa:
@@ -38,8 +38,8 @@
 #include "config.h"
 
 // ---------------- Topicos MQTT ----------------
-// aireaula/<aula>/<nodo>/<tipo>
-#define BASE_TOPIC "aireaula/" AULA_ID "/" NODE_ID
+// anemo/<aula>/<nodo>/<tipo>
+#define BASE_TOPIC "anemo/" AULA_ID "/" NODE_ID
 const char* T_TELEMETRIA = BASE_TOPIC "/telemetria";  // publica
 const char* T_EVENTO     = BASE_TOPIC "/evento";      // publica
 const char* T_ESTADO     = BASE_TOPIC "/estado";      // publica (retenido + LWT)
@@ -350,7 +350,7 @@ void actualizarSalidas() {
 void setup() {
   Serial.begin(115200);
   delay(200);
-  Serial.println("\n=== AireAula nodo " NODE_ID " ===");
+  Serial.println("\n=== Anemo nodo " NODE_ID " ===");
   tArranque = millis();
 
   pinMode(PIN_VENT, OUTPUT); digitalWrite(PIN_VENT, LOW);

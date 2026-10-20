@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AireAula - Envio de comandos al nodo desde la Raspberry Pi
+Anemo - Envio de comandos al nodo desde la Raspberry Pi
 Publica el comando y espera la confirmacion (evento cmd_ok / cmd_error).
 
 Ejemplos:
@@ -21,7 +21,7 @@ PORT = int(os.getenv("MQTT_PORT", "1883"))
 USER = os.getenv("MQTT_USER", "pi_sub")
 PASS = os.getenv("MQTT_PASS", "")
 
-p = argparse.ArgumentParser(description="Comandos para el nodo AireAula")
+p = argparse.ArgumentParser(description="Comandos para el nodo Anemo")
 p.add_argument("comando", choices=["aforo", "modo", "ventilador"])
 p.add_argument("valor")
 p.add_argument("--aula", default="aula01")
@@ -41,7 +41,7 @@ else:
         sys.exit("ventilador: auto | on | off")
     payload = {"modo": a.valor}
 
-base = f"aireaula/{a.aula}/{a.nodo}"
+base = f"anemo/{a.aula}/{a.nodo}"
 respuesta = {}
 
 
@@ -51,7 +51,7 @@ def al_recibir(c, u, msg):
         respuesta.update(d)
 
 
-c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"aireaula-cli-{os.getpid()}")
+c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"anemo-cli-{os.getpid()}")
 c.username_pw_set(USER, PASS)
 c.on_message = al_recibir
 c.connect(HOST, PORT, 15)

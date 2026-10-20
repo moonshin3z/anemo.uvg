@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AireAula - Simulador del nodo ESP32
+Anemo - Simulador del nodo ESP32
 Publica los mismos mensajes que el firmware real (mismos topicos y payloads)
 para probar el broker, el suscriptor y Firebase sin el hardware.
 
@@ -31,7 +31,7 @@ p.add_argument("--ach", type=float, default=6.0, help="renovaciones/h con la pue
 a = p.parse_args()
 
 TZ = timezone(timedelta(hours=-6))
-BASE = "aireaula/aula01/nodo01"
+BASE = "anemo/aula01/nodo01"
 st = {"seq": 0, "co2": 600.0, "ocupacion": None, "puerta": "cerrada", "ventana": "cerrada",
       "modo": "normal", "vent_modo": "auto", "ventilador": False, "aire": "sin_dato"}
 inicio = time.time()
@@ -69,7 +69,7 @@ def al_recibir(c, u, msg):
         evento(c, "cmd_error", "comando desconocido o mal formado")
 
 
-c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="aireaula-nodo01")
+c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="anemo-nodo01")
 c.username_pw_set(a.user, a.password)
 c.will_set(BASE + "/estado", json.dumps({"nodo": "nodo01", "estado": "offline"}), qos=1, retain=True)
 c.on_connect, c.on_message = al_conectar, al_recibir

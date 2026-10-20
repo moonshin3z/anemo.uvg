@@ -1,5 +1,5 @@
 // =============================================================
-//  AireAula - Configuracion del nodo IoT (ESP32)
+//  Anemo - Configuracion del nodo IoT (ESP32)
 //  Cambiar SOLO este archivo para adaptar el nodo a la red,
 //  al broker de la Raspberry Pi y a los sensores 433 MHz.
 // =============================================================
@@ -8,10 +8,10 @@
 // ---------- Identificacion del nodo ----------
 #define AULA_ID        "aula01"
 #define NODE_ID        "nodo01"
-#define MQTT_CLIENT_ID "aireaula-nodo01"   // identificador del cliente MQTT
+#define MQTT_CLIENT_ID "anemo-nodo01"   // identificador del cliente MQTT
 
 // ---------- Red Wi-Fi local (la misma de la Raspberry Pi) ----------
-#define WIFI_SSID "AireAula-LAN"
+#define WIFI_SSID "Anemo-LAN"
 #define WIFI_PASS "cambiar-clave"
 
 // ---------- Broker MQTT en la Raspberry Pi ----------

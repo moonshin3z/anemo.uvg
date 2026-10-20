@@ -1,0 +1,12 @@
+# Permisos por usuario MQTT
+
+# Nodo ESP32: publica sus datos y lee sus comandos
+user nodo01
+topic write anemo/aula01/nodo01/telemetria
+topic write anemo/aula01/nodo01/evento
+topic write anemo/aula01/nodo01/estado
+topic read  anemo/aula01/nodo01/cmd/#
+
+# Suscriptor de la Pi: lee todo, publica comandos y datos procesados
+user pi_sub
+topic readwrite anemo/#

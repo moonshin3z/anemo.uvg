@@ -1,0 +1,15 @@
+[Unit]
+Description=Anemo - suscriptor MQTT, SQLite y Firebase
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+User=__USER__
+WorkingDirectory=/opt/anemo
+EnvironmentFile=/opt/anemo/.env
+ExecStart=/opt/anemo/venv/bin/python /opt/anemo/suscriptor.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

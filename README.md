@@ -1,4 +1,4 @@
-# AireAula: Fase 03 (nodo + MQTT + Raspberry Pi + Firebase)
+# Anemo: Fase 03 (nodo + MQTT + Raspberry Pi + Firebase)
 
 ```
 ESP32 (sensores, LED, ventilador)
@@ -12,8 +12,8 @@ Raspberry Pi: Mosquitto (broker) + chrony (hora) + suscriptor.py
 
 | Archivo | Que es |
 |---|---|
-| `firmware/aireaula_nodo/config.h` | Red, broker, pines, umbrales, codigos 433 MHz. Lo unico que se edita |
-| `firmware/aireaula_nodo/aireaula_nodo.ino` | Firmware del ESP32 |
+| `firmware/anemo_nodo/config.h` | Red, broker, pines, umbrales, codigos 433 MHz. Lo unico que se edita |
+| `firmware/anemo_nodo/anemo_nodo.ino` | Firmware del ESP32 |
 | `raspberry/setup_pi.sh` | Instala y configura todo en la Pi |
 | `raspberry/mosquitto/` | Configuracion del broker y permisos (ACL) |
 | `raspberry/suscriptor/suscriptor.py` | Suscriptor: valida, guarda, calcula ACH, sube a Firebase |
@@ -29,20 +29,20 @@ Raspberry Pi: Mosquitto (broker) + chrony (hora) + suscriptor.py
    cd raspberry && sudo bash setup_pi.sh
    ```
    Pide dos claves: `nodo01` (la misma de `config.h`) y `pi_sub`.
-3. Editar `/opt/aireaula/.env` (poner la clave de `pi_sub`).
+3. Editar `/opt/anemo/.env` (poner la clave de `pi_sub`).
 4. Probar el broker en dos terminales:
    ```bash
-   mosquitto_sub -h localhost -u pi_sub -P <clave> -t 'aireaula/#' -v
-   mosquitto_pub -h localhost -u pi_sub -P <clave> -t aireaula/prueba -m hola
+   mosquitto_sub -h localhost -u pi_sub -P <clave> -t 'anemo/#' -v
+   mosquitto_pub -h localhost -u pi_sub -P <clave> -t anemo/prueba -m hola
    ```
-5. Arrancar el suscriptor: `sudo systemctl start aireaula-suscriptor` y ver `journalctl -u aireaula-suscriptor -f`.
-6. Sin hardware: `python3 /opt/aireaula/simulador_nodo.py --password <clave nodo01>`.
+5. Arrancar el suscriptor: `sudo systemctl start anemo-suscriptor` y ver `journalctl -u anemo-suscriptor -f`.
+6. Sin hardware: `python3 /opt/anemo/simulador_nodo.py --password <clave nodo01>`.
 
 ## 2. Firebase
 
 1. En console.firebase.google.com: crear proyecto, luego **Firestore Database**, modo produccion, region `us-central1`.
 2. Configuracion del proyecto, **Cuentas de servicio**, "Generar nueva clave privada". Se descarga un JSON.
-3. Copiarlo a la Pi como `/opt/aireaula/firebase-key.json` y reiniciar el servicio.
+3. Copiarlo a la Pi como `/opt/anemo/firebase-key.json` y reiniciar el servicio.
 4. **No subir esa llave a GitHub** (esta en `.gitignore`).
 
 La Pi usa el Admin SDK, asi que no hace falta abrir reglas de Firestore. Si otro equipo hace una pagina web que lea los datos, las reglas deben permitir solo lectura.
@@ -58,12 +58,12 @@ La Pi usa el Admin SDK, asi que no hace falta abrir reglas de Firestore. Si otro
 ## 4. Comandos utiles en la Pi
 
 ```bash
-cd /opt/aireaula && set -a && . ./.env && set +a
+cd /opt/anemo && set -a && . ./.env && set +a
 venv/bin/python aforo.py aforo 28         # ocupacion actual
 venv/bin/python aforo.py modo ahorro      # o normal
 venv/bin/python aforo.py ventilador on    # on | off | auto
-sqlite3 aireaula.db "select recibido,seq,latencia_s,obs from mensajes order by id desc limit 10;"
-mosquitto_sub -h localhost -u pi_sub -P <clave> -t 'aireaula/+/+/estado' -v   # online/offline
+sqlite3 anemo.db "select recibido,seq,latencia_s,obs from mensajes order by id desc limit 10;"
+mosquitto_sub -h localhost -u pi_sub -P <clave> -t 'anemo/+/+/estado' -v   # online/offline
 ```
 
 ## 5. Pruebas para el informe

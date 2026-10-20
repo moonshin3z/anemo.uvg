@@ -1,13 +1,13 @@
-# AireAula: catalogo de mensajes MQTT
+# Anemo: catalogo de mensajes MQTT
 
 Broker: Mosquitto en la Raspberry Pi, puerto 1883, con usuario y clave (sin anonimos) y ACL por usuario.
-Formato de topicos: `aireaula/<aula>/<nodo>/<tipo>`. Payloads en JSON UTF-8.
+Formato de topicos: `anemo/<aula>/<nodo>/<tipo>`. Payloads en JSON UTF-8.
 
 | Cliente | Client ID | Usuario MQTT | Rol |
 |---|---|---|---|
-| Nodo ESP32 | `aireaula-nodo01` | `nodo01` | Publica telemetria, eventos y estado; recibe comandos |
-| Suscriptor de la Pi | `aireaula-pi-suscriptor` | `pi_sub` | Recibe todo, guarda, procesa, sube a Firebase |
-| CLI de comandos | `aireaula-cli-<pid>` | `pi_sub` | Envia aforo, modo y ventilador |
+| Nodo ESP32 | `anemo-nodo01` | `nodo01` | Publica telemetria, eventos y estado; recibe comandos |
+| Suscriptor de la Pi | `anemo-pi-suscriptor` | `pi_sub` | Recibe todo, guarda, procesa, sube a Firebase |
+| CLI de comandos | `anemo-cli-<pid>` | `pi_sub` | Envia aforo, modo y ventilador |
 
 > Cada cliente debe tener un Client ID unico: si dos clientes usan el mismo, el broker desconecta al anterior y se pierden mensajes.
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-AireAula - Suscriptor MQTT en la Raspberry Pi
+Anemo - Suscriptor MQTT en la Raspberry Pi
 =============================================
-1. Se suscribe a todos los topicos del sistema (aireaula/#).
+1. Se suscribe a todos los topicos del sistema (anemo/#).
 2. Valida cada mensaje (JSON, rangos, secuencia) y mide la latencia.
 3. Guarda todo en SQLite (funciona sin internet) y en un CSV de evidencia.
 4. Calcula la tasa de ventilacion (ACH) a partir de la caida del CO2
@@ -30,10 +30,10 @@ MQTT_HOST = os.getenv("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
 MQTT_USER = os.getenv("MQTT_USER", "pi_sub")
 MQTT_PASS = os.getenv("MQTT_PASS", "")
-CLIENT_ID = "aireaula-pi-suscriptor"
-TOPICO = "aireaula/#"
+CLIENT_ID = "anemo-pi-suscriptor"
+TOPICO = "anemo/#"
 
-DB_PATH = os.getenv("DB_PATH", "aireaula.db")
+DB_PATH = os.getenv("DB_PATH", "anemo.db")
 CSV_PATH = os.getenv("CSV_PATH", "mensajes.csv")
 FIREBASE_KEY = os.getenv("FIREBASE_KEY", "firebase-key.json")
 FB_TELEMETRIA_S = int(os.getenv("FIREBASE_TELEMETRIA_S", "60"))
@@ -55,7 +55,7 @@ RANGOS = {
 }
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("aireaula")
+log = logging.getLogger("anemo")
 
 
 # ---------------- Base de datos local ----------------
