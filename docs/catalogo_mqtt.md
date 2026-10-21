@@ -65,6 +65,7 @@ Proposito: avisar de inmediato un cambio, sin esperar la siguiente telemetria.
 | `aire` | `bueno`, `moderado`, `malo` | Cambia la clasificacion |
 | `ventilador` | `encendido`, `apagado` | Cambia la salida |
 | `conexion` | `conectado al broker` | Al (re)conectar |
+| `sensor` | `bme280 reinicializado` | El BME280 dio 3 lecturas imposibles seguidas (corte de energia) y se reinicio |
 | `cmd_ok` | texto del cambio aplicado | Comando valido |
 | `cmd_error` | motivo | Comando invalido o fuera de rango |
 

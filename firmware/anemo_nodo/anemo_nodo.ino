@@ -275,13 +275,28 @@ void leerCo2() {
   else { st.co2 = NAN; st.erroresSensor++; }
 }
 
+// Si el BME280 pierde energia un instante se reinicia "dormido" y entrega
+// siempre los mismos valores imposibles (ej. 181.5 C, -155 hPa). En ese caso
+// se descartan TODAS sus lecturas y, tras 3 fallos seguidos, se reinicializa.
+void iniciarBme() { st.bmeOk = bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire); }
+
 void leerBme() {
-  if (!st.bmeOk) return;
+  static uint8_t fallos = 0;
+  if (!st.bmeOk) { iniciarBme(); if (!st.bmeOk) return; }
   float t = bme.readTemperature(), h = bme.readHumidity(), p = bme.readPressure() / 100.0f;
-  st.temp = enRango(t, -10, 60) ? t : NAN;
-  st.hum  = enRango(h, 0, 100) ? h : NAN;
-  st.pres = enRango(p, 300, 1100) ? p : NAN;
-  if (isnan(st.temp) || isnan(st.hum) || isnan(st.pres)) st.erroresSensor++;
+  bool valido = enRango(t, -10, 60) && enRango(h, 0, 100) && enRango(p, 300, 1100);
+  if (valido) {
+    st.temp = t; st.hum = h; st.pres = p; fallos = 0;
+  } else {
+    st.temp = st.hum = st.pres = NAN;
+    st.erroresSensor++;
+    if (++fallos >= 3) {
+      Serial.println("[BME280] lecturas invalidas, reinicializando");
+      publicarEvento("sensor", "bme280 reinicializado");
+      iniciarBme();
+      fallos = 0;
+    }
+  }
 }
 
 void leerRf() {
@@ -360,7 +375,7 @@ void setup() {
   led.begin(); led.setBrightness(LED_BRILLO); led.clear(); led.show();
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
-  st.bmeOk = bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire);
+  iniciarBme();
   st.sgpOk = sgp.begin(&Wire);
   Serial.printf("BME280: %s  SGP40: %s\n", st.bmeOk ? "ok" : "NO", st.sgpOk ? "ok" : "NO");
 
