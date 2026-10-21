@@ -18,7 +18,7 @@
 //
 //  Librerias (Gestor de bibliotecas de Arduino IDE):
 //   PubSubClient (Nick O'Leary), ArduinoJson 7 (Benoit Blanchon),
-//   Adafruit BME280 Library, Adafruit SGP40 Sensor,
+//   Adafruit BME280 Library, Adafruit BMP280 Library, Adafruit SGP40 Sensor,
 //   MH-Z19 (Jonathan Dempsey), PMS Library (Mariusz Kacki),
 //   rc-switch (sui77), Adafruit NeoPixel
 //  Placa: "ESP32 Dev Module"
@@ -28,6 +28,7 @@
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <Adafruit_BME280.h>
+#include <Adafruit_BMP280.h>   // respaldo: mismo modulo morado con chip BMP280
 #include <Adafruit_SGP40.h>
 #include <MHZ19.h>
 #include <PMS.h>
@@ -52,6 +53,8 @@ const char* T_CMD_VENT   = BASE_TOPIC "/cmd/ventilador";
 WiFiClient        net;
 PubSubClient      mqtt(net);
 Adafruit_BME280   bme;
+Adafruit_BMP280   bmp(&Wire);
+bool              esBmp = false;   // true si el chip es BMP280 (sin humedad)
 Adafruit_SGP40    sgp;
 MHZ19             mhz;
 PMS               pms(Serial1);
@@ -278,13 +281,21 @@ void leerCo2() {
 // Si el BME280 pierde energia un instante se reinicia "dormido" y entrega
 // siempre los mismos valores imposibles (ej. 181.5 C, -155 hPa). En ese caso
 // se descartan TODAS sus lecturas y, tras 3 fallos seguidos, se reinicializa.
-void iniciarBme() { st.bmeOk = bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire); }
+// El modulo GY-BME/PMP280 puede traer chip BME280 (ID 0x60, con humedad)
+// o BMP280 (ID 0x58, sin humedad). Se prueba primero BME y luego BMP.
+void iniciarBme() {
+  esBmp = false;
+  st.bmeOk = bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire);
+  if (!st.bmeOk && (bmp.begin(0x76) || bmp.begin(0x77))) { st.bmeOk = true; esBmp = true; }
+}
 
 void leerBme() {
   static uint8_t fallos = 0;
   if (!st.bmeOk) { iniciarBme(); if (!st.bmeOk) return; }
-  float t = bme.readTemperature(), h = bme.readHumidity(), p = bme.readPressure() / 100.0f;
-  bool valido = enRango(t, -10, 60) && enRango(h, 0, 100) && enRango(p, 300, 1100);
+  float t, h, p;
+  if (esBmp) { t = bmp.readTemperature(); h = NAN; p = bmp.readPressure() / 100.0f; }
+  else       { t = bme.readTemperature(); h = bme.readHumidity(); p = bme.readPressure() / 100.0f; }
+  bool valido = enRango(t, -10, 60) && enRango(p, 300, 1100) && (esBmp || enRango(h, 0, 100));
   if (valido) {
     st.temp = t; st.hum = h; st.pres = p; fallos = 0;
   } else {
@@ -377,7 +388,7 @@ void setup() {
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
   iniciarBme();
   st.sgpOk = sgp.begin(&Wire);
-  Serial.printf("BME280: %s  SGP40: %s\n", st.bmeOk ? "ok" : "NO", st.sgpOk ? "ok" : "NO");
+  Serial.printf("%s: %s  SGP40: %s\n", esBmp ? "BMP280" : "BME280", st.bmeOk ? "ok" : "NO", st.sgpOk ? "ok" : "NO");
 
   Serial2.begin(9600, SERIAL_8N1, PIN_MHZ_RX, PIN_MHZ_TX);
   mhz.begin(Serial2);
