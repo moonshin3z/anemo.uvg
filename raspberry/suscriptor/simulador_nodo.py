@@ -102,7 +102,7 @@ try:
         c.publish(BASE + "/telemetria", json.dumps({
             "nodo": "nodo01", "aula": "aula01", "seq": st["seq"], "ts": ts(),
             "uptime_s": int(t), "modo": st["modo"], "co2_ppm": round(co2),
-            "pm25_ugm3": round(pm, 1), "voc_index": voc, "n_pm25": 10, "n_voc": 10,
+            "pm1_ugm3": round(pm*0.7, 1), "pm25_ugm3": round(pm, 1), "pm10_ugm3": round(pm*1.2, 1), "voc_index": voc, "n_pm25": 10, "n_voc": 10,
             "temp_c": round(random.uniform(23, 25), 1), "hum_pct": round(random.uniform(55, 60), 1),
             "pres_hpa": 845.2, "ocupacion": st["ocupacion"], "puerta": st["puerta"],
             "ventana": st["ventana"], "ventilador": vent, "vent_modo": st["vent_modo"],

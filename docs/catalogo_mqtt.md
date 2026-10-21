@@ -29,7 +29,7 @@ Proposito: reportar todas las variables medidas y el estado de las salidas.
 
 ```json
 {"nodo":"nodo01","aula":"aula01","seq":152,"ts":"2026-10-20T09:15:40-06:00","uptime_s":1520,
- "modo":"normal","co2_ppm":1043,"pm25_ugm3":12.4,"voc_index":118,"n_pm25":10,"n_voc":10,
+ "modo":"normal","co2_ppm":1043,"pm1_ugm3":8.1,"pm25_ugm3":12.4,"pm10_ugm3":15.0,"voc_index":118,"n_pm25":10,"n_voc":10,
  "temp_c":24.6,"hum_pct":58.1,"pres_hpa":845.2,"ocupacion":28,"puerta":"cerrada",
  "ventana":"abierta","ventilador":true,"vent_modo":"auto","aire":"malo","errores":0,"diferido":false}
 ```
@@ -40,7 +40,7 @@ Proposito: reportar todas las variables medidas y el estado de las salidas.
 | `ts` | texto o null | Hora del nodo en ISO 8601 con zona (UTC-6), sincronizada por NTP con la Pi. `null` si aun no hay hora: la Pi usa su hora de recepcion |
 | `uptime_s` | entero | Segundos desde que arranco el nodo (respaldo si no hay `ts`) |
 | `co2_ppm` | entero o null | Ultima lectura valida del MH-Z19C (null en el precalentamiento de 1 min o si falla) |
-| `pm25_ugm3`, `voc_index` | numero o null | Promedio de las lecturas de 1 s de la ventana de envio |
+| `pm1_ugm3`, `pm25_ugm3`, `pm10_ugm3`, `voc_index` | numero o null | Promedio de las lecturas de 1 s de la ventana de envio |
 | `n_pm25`, `n_voc` | entero | Cantidad de lecturas promediadas (control de calidad) |
 | `temp_c`, `hum_pct`, `pres_hpa` | numero o null | BME280 |
 | `ocupacion` | entero o null | Ultimo aforo recibido por comando |

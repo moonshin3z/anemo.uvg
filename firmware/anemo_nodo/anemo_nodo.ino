@@ -67,7 +67,7 @@ struct Estado {
   // ultimas lecturas validas (NAN = sin dato valido)
   float co2 = NAN, temp = NAN, hum = NAN, pres = NAN;
   // acumuladores para promediar PM2.5 y COV entre envios
-  float pmSuma = 0, vocSuma = 0;
+  float pmSuma = 0, vocSuma = 0, pm1Suma = 0, pm10Suma = 0;
   uint16_t pmN = 0, vocN = 0;
   float pmUltimo = NAN, vocUltimo = NAN;
   // entradas digitales / manuales
@@ -173,7 +173,9 @@ void publicarTelemetria() {
   d["modo"] = st.ahorro ? "ahorro" : "normal";
   setNum(d, "co2_ppm", st.co2, 0);
   // PM2.5 y COV: promedio de las lecturas de 1 s de esta ventana
+  setNum(d, "pm1_ugm3",  st.pmN ? st.pm1Suma / st.pmN : NAN, 1);
   setNum(d, "pm25_ugm3", st.pmN ? st.pmSuma / st.pmN : NAN, 1);
+  setNum(d, "pm10_ugm3", st.pmN ? st.pm10Suma / st.pmN : NAN, 1);
   setNum(d, "voc_index", st.vocN ? st.vocSuma / st.vocN : NAN, 0);
   d["n_pm25"] = st.pmN; d["n_voc"] = st.vocN;
   setNum(d, "temp_c", st.temp, 1);
@@ -187,7 +189,7 @@ void publicarTelemetria() {
   d["aire"] = st.aire;
   d["errores"] = st.erroresSensor;
   publicarODiferir(T_TELEMETRIA, d);
-  st.pmSuma = st.vocSuma = 0; st.pmN = st.vocN = 0;   // nueva ventana
+  st.pmSuma = st.pm1Suma = st.pm10Suma = st.vocSuma = 0; st.pmN = st.vocN = 0;   // nueva ventana
 }
 
 void publicarEstado(bool online) {
@@ -265,8 +267,10 @@ void leerSgp40() {                       // cada 1 s
 
 void leerPms() {                          // el sensor emite una trama ~1 s
   if (pms.read(pmsData)) {
-    float pm = pmsData.PM_AE_UG_2_5;
-    if (enRango(pm, 0, 1000)) { st.pmSuma += pm; st.pmN++; st.pmUltimo = pm; }
+    float pm = pmsData.PM_AE_UG_2_5, pm1 = pmsData.PM_AE_UG_1_0, pm10 = pmsData.PM_AE_UG_10_0;
+    if (enRango(pm, 0, 1000) && enRango(pm1, 0, 1000) && enRango(pm10, 0, 1000)) {
+      st.pmSuma += pm; st.pm1Suma += pm1; st.pm10Suma += pm10; st.pmN++; st.pmUltimo = pm;
+    }
     else st.erroresSensor++;
   }
 }
