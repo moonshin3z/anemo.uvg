@@ -60,6 +60,9 @@ MHZ19             mhz;
 PMS               pms(Serial1);
 PMS::DATA         pmsData;
 RCSwitch          rf;
+#if !PUERTA_CABLEADA && PUERTA_SIMULADA
+RCSwitch          rfTx;           // FS1000A de la puerta simulada
+#endif
 Adafruit_NeoPixel led(LED_COUNT, PIN_LED, NEO_GRB + NEO_KHZ800);
 
 // ---------------- Estado del sistema ----------------
@@ -359,6 +362,22 @@ void leerRf() {
   if (v != st.ventana) { st.ventana = v; publicarEvento("ventana", txtPuerta(v)); }
 }
 
+#if !PUERTA_CABLEADA && PUERTA_SIMULADA
+// Puerta simulada: lee el cable de PIN_SIM_PUERTA y manda el codigo por 433 MHz.
+// Reenvia cada 30 s por si un paquete se pierde (igual que hacen los sensores reales).
+void simularPuerta() {
+  static int8_t ultima = -1, enviada = -1;
+  static uint32_t tCambio = 0, tEnvio = 0;
+  int8_t l = digitalRead(PIN_SIM_PUERTA) == HIGH ? 1 : 0;   // suelto = abierta
+  if (l != ultima) { ultima = l; tCambio = millis(); return; }
+  if (millis() - tCambio < 50) return;
+  if (l == enviada && millis() - tEnvio < 30000UL) return;
+  enviada = l; tEnvio = millis();
+  rfTx.send(l ? RF_PUERTA_ABIERTA : RF_PUERTA_CERRADA, 24);
+  Serial.printf("[SIM] puerta %s enviada por 433 MHz\n", l ? "abierta" : "cerrada");
+}
+#endif
+
 // =============================================================
 //  Procesamiento local y salidas (funciona sin red)
 // =============================================================
@@ -438,6 +457,11 @@ void setup() {
 #else
   rf.enableReceive(digitalPinToInterrupt(PIN_RF));
   rf.setReceiveTolerance(80);   // receptor MX-RM-5V barato: tolerar pulsos deformados
+#if PUERTA_SIMULADA
+  pinMode(PIN_SIM_PUERTA, INPUT_PULLUP);
+  rfTx.enableTransmit(PIN_RF_TX);
+  rfTx.setRepeatTransmit(8);
+#endif
 #endif
 
   WiFi.mode(WIFI_STA);
@@ -462,6 +486,9 @@ void loop() {
 #if PUERTA_CABLEADA
   leerPuertaCableada();
 #else
+#if PUERTA_SIMULADA
+  simularPuerta();
+#endif
   leerRf();
 #endif
 

@@ -40,7 +40,15 @@
 // ---------- Sensor de puerta ----------
 // 1 = sensor magnetico con cable (MC-38) directo a PIN_RF y GND (recomendado)
 // 0 = sensor inalambrico 433 MHz con receptor
-#define PUERTA_CABLEADA 1
+#define PUERTA_CABLEADA 0
+
+// Puerta simulada (demo sin sensor de puerta, solo vale con PUERTA_CABLEADA 0):
+// un cable en PIN_SIM_PUERTA hace de "iman". Conectado a GND = cerrada,
+// suelto = abierta. Al cambiar, el FS1000A en PIN_RF_TX manda el codigo por
+// 433 MHz y el receptor en PIN_RF lo recibe como si fuera un sensor real.
+#define PUERTA_SIMULADA 1
+#define PIN_RF_TX       33   // DATA del transmisor FS1000A
+#define PIN_SIM_PUERTA  18   // cable a GND = puerta cerrada
 #define PIN_VENT      13   // compuerta del MOSFET AO3400 (via 220 ohm)
 #define PIN_LED       4    // DIN de la tarjeta WS2812 (via 330 ohm)
 #define LED_COUNT     8
@@ -50,8 +58,8 @@
 // Se obtienen con la prueba inicial: abrir y cerrar cada sensor
 // mirando el monitor serie (el firmware imprime cada codigo recibido).
 // Con un solo sensor (puerta), dejar los de ventana en 0: se reporta "desconocido".
-#define RF_PUERTA_ABIERTA   0UL
-#define RF_PUERTA_CERRADA   0UL
+#define RF_PUERTA_ABIERTA   10101UL   // codigos de la puerta simulada
+#define RF_PUERTA_CERRADA   10100UL
 #define RF_VENTANA_ABIERTA  0UL
 #define RF_VENTANA_CERRADA  0UL
 
