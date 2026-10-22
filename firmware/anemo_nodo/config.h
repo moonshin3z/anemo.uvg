@@ -35,6 +35,12 @@
 #define PIN_PMS_RX    27   // ESP32 RX  <- TX del PMS5003
 #define PIN_PMS_TX    14   // ESP32 TX  -> RX del PMS5003
 #define PIN_RF        32   // DATA del receptor 433 MHz (via divisor 10k/20k)
+                           // o, si PUERTA_CABLEADA = 1, un cable del sensor MC-38 (el otro a GND)
+
+// ---------- Sensor de puerta ----------
+// 1 = sensor magnetico con cable (MC-38) directo a PIN_RF y GND (recomendado)
+// 0 = sensor inalambrico 433 MHz con receptor
+#define PUERTA_CABLEADA 1
 #define PIN_VENT      13   // compuerta del MOSFET AO3400 (via 220 ohm)
 #define PIN_LED       4    // DIN de la tarjeta WS2812 (via 330 ohm)
 #define LED_COUNT     8

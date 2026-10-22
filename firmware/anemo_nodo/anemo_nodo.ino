@@ -314,6 +314,19 @@ void leerBme() {
   }
 }
 
+// Sensor de puerta cableado (MC-38): con el iman cerca el contacto se cierra
+// y el pin lee 0 (cerrada); sin iman la resistencia interna lo sube a 1 (abierta).
+// Se exige 50 ms de lectura estable para ignorar rebotes del contacto.
+void leerPuertaCableada() {
+  static int8_t ultimaLectura = -1;
+  static uint32_t tCambio = 0;
+  int8_t lectura = digitalRead(PIN_RF) == HIGH ? 1 : 0;
+  if (lectura != ultimaLectura) { ultimaLectura = lectura; tCambio = millis(); return; }
+  if (millis() - tCambio < 50 || lectura == st.puerta) return;
+  st.puerta = lectura;
+  publicarEvento("puerta", txtPuerta(lectura));
+}
+
 void leerRf() {
   if (!rf.available()) return;
   unsigned long c = rf.getReceivedValue();
@@ -401,7 +414,11 @@ void setup() {
   Serial1.begin(9600, SERIAL_8N1, PIN_PMS_RX, PIN_PMS_TX);
   pms.activeMode();
 
+#if PUERTA_CABLEADA
+  pinMode(PIN_RF, INPUT_PULLUP);
+#else
   rf.enableReceive(digitalPinToInterrupt(PIN_RF));
+#endif
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
@@ -422,7 +439,11 @@ void loop() {
   mqtt.loop();
 
   leerPms();
+#if PUERTA_CABLEADA
+  leerPuertaCableada();
+#else
   leerRf();
+#endif
 
   if (ahora - tSgp >= T_SGP40_MS) { tSgp = ahora; leerSgp40(); }
   if (ahora - tCo2 >= (st.ahorro ? T_CO2_AHORRO_MS : T_CO2_NORMAL_MS)) { tCo2 = ahora; leerCo2(); }
