@@ -257,6 +257,23 @@ void conectarMqtt() {
 // =============================================================
 //  Lectura de sensores
 // =============================================================
+// Recuperacion del bus I2C: si un sensor quedo "agarrando" SDA por un glitch,
+// se liberan las lineas con 9 pulsos de reloj y se reinician los sensores.
+void recuperarI2C() {
+  Serial.println("[I2C] bus bloqueado: recuperando");
+  Wire.end();
+  pinMode(PIN_I2C_SDA, INPUT_PULLUP);
+  pinMode(PIN_I2C_SCL, OUTPUT_OPEN_DRAIN);
+  for (int i = 0; i < 9; i++) {
+    digitalWrite(PIN_I2C_SCL, LOW);  delayMicroseconds(5);
+    digitalWrite(PIN_I2C_SCL, HIGH); delayMicroseconds(5);
+  }
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  Wire.setTimeOut(50);
+  st.sgpOk = sgp.begin(&Wire);
+  publicarEvento("sensor", "bus i2c recuperado");
+}
+
 void leerSgp40() {                       // cada 1 s
   if (!st.sgpOk) return;
   float t = isnan(st.temp) ? 25 : st.temp, h = isnan(st.hum) ? 50 : st.hum;
@@ -308,6 +325,7 @@ void leerBme() {
     if (++fallos >= 3) {
       Serial.println("[BME280] lecturas invalidas, reinicializando");
       publicarEvento("sensor", "bme280 reinicializado");
+      recuperarI2C();
       iniciarBme();
       fallos = 0;
     }
@@ -403,6 +421,7 @@ void setup() {
   led.begin(); led.setBrightness(LED_BRILLO); led.clear(); led.show();
 
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  Wire.setTimeOut(50);   // si un sensor no responde, no congela el programa
   iniciarBme();
   st.sgpOk = sgp.begin(&Wire);
   Serial.printf("%s: %s  SGP40: %s\n", esBmp ? "BMP280" : "BME280", st.bmeOk ? "ok" : "NO", st.sgpOk ? "ok" : "NO");
