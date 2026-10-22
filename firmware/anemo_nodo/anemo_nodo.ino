@@ -418,6 +418,7 @@ void setup() {
   pinMode(PIN_RF, INPUT_PULLUP);
 #else
   rf.enableReceive(digitalPinToInterrupt(PIN_RF));
+  rf.setReceiveTolerance(80);   // receptor MX-RM-5V barato: tolerar pulsos deformados
 #endif
 
   WiFi.mode(WIFI_STA);
