@@ -51,7 +51,7 @@
 #define PUERTA_SIMULADA 1
 #define PIN_RF_TX       33   // DATA del transmisor FS1000A
 #define PIN_SIM_PUERTA  18   // cable a GND = puerta cerrada
-#define PIN_VENT      13   // compuerta del MOSFET AO3400 (via 220 ohm)
+#define PIN_VENT      13   // base del transistor 2N2222A (via 1k); HIGH = ventilador encendido
 #define PIN_LED       4    // DIN de la tarjeta WS2812 (via 330 ohm)
 #define LED_COUNT     8
 #define LED_BRILLO    40   // 0-255; limita el consumo de los LED
