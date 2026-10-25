@@ -480,11 +480,15 @@ void actualizarSalidas() {
   bool alertaVentilar = st.aire == "malo" && st.puerta != 1 && st.ventana != 1 &&
                         (st.puerta == 0 || st.ventana == 0);
   if (alertaVentilar && parpadeo) color = 0;
-  // Solo se refresca si cambia el color: led.show() apaga las
-  // interrupciones un instante y podria cortar una trama de 433 MHz.
-  static uint32_t colorActual = 0xFFFFFFFF;
-  if (color == colorActual) return;
-  colorActual = color;
+  // Se refresca al cambiar el color y, ademas, cada 2 s: si la tira pierde
+  // la alimentacion un instante (ej. al arrancar el ventilador) se apaga y
+  // sin este refresco se quedaria apagada hasta el siguiente cambio de color.
+  // Con el receptor 433 MHz el refresco periodico se omite, porque
+  // led.show() apaga las interrupciones y podria cortar una trama de radio.
+  static uint32_t colorActual = 0xFFFFFFFF, tRefresco = 0;
+  bool refrescar = PUERTA_CABLEADA && millis() - tRefresco >= 2000;
+  if (color == colorActual && !refrescar) return;
+  colorActual = color; tRefresco = millis();
   for (int i = 0; i < LED_COUNT; i++) led.setPixelColor(i, color);
   led.show();
 }
