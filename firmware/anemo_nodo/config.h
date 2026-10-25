@@ -36,13 +36,13 @@
 #define PIN_MHZ_TX    26   // ESP32 TX  -> RX del MH-Z19C
 #define PIN_PMS_RX    27   // ESP32 RX  <- TX del PMS5003
 #define PIN_PMS_TX    14   // ESP32 TX  -> RX del PMS5003
-#define PIN_RF        32   // DATA del receptor 433 MHz (via divisor 10k/20k)
+#define PIN_RF        32   // sensor de puerta MC-38 (un cable aqui, el otro a GND)
                            // o, si PUERTA_CABLEADA = 1, un cable del sensor MC-38 (el otro a GND)
 
 // ---------- Sensor de puerta ----------
 // 1 = sensor magnetico con cable (MC-38) directo a PIN_RF y GND (recomendado)
 // 0 = sensor inalambrico 433 MHz con receptor
-#define PUERTA_CABLEADA 0
+#define PUERTA_CABLEADA 1
 
 // Puerta simulada (demo sin sensor de puerta, solo vale con PUERTA_CABLEADA 0):
 // un cable en PIN_SIM_PUERTA hace de "iman". Conectado a GND = cerrada,
