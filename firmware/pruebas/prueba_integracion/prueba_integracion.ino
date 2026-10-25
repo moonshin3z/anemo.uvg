@@ -2,18 +2,19 @@
 #include <Wire.h>
 #include <Adafruit_BME280.h>
 #include <Adafruit_BMP280.h>
+#include <Adafruit_BME680.h>
 #include <Adafruit_SGP40.h>
 #include <MHZ19.h>
 #include <PMS.h>
 #include <RCSwitch.h>
 #include <Adafruit_NeoPixel.h>
 
-Adafruit_BME280 bme; Adafruit_BMP280 bmp(&Wire); Adafruit_SGP40 sgp;
+Adafruit_BME280 bme; Adafruit_BMP280 bmp(&Wire); Adafruit_BME680 bme680(&Wire); Adafruit_SGP40 sgp;
 MHZ19 mhz; PMS pms(Serial1); PMS::DATA pd;
 RCSwitch rx, tx;
 Adafruit_NeoPixel led(8, 4, NEO_GRB + NEO_KHZ800);
 
-bool bmeOk, esBmp, sgpOk;
+bool bmeOk, esBmp, es680, sgpOk;
 float t = NAN, h = NAN, p = NAN; int voc = -1, co2 = -1, pm1 = -1, pm25 = -1, pm10 = -1;
 int puerta = -1; unsigned long ultimoRf = 0;
 uint32_t tSgp, tCo2, tImp;
@@ -27,14 +28,19 @@ void setup() {
   color(255,0,0); delay(500); color(0,255,0); delay(500); color(0,0,255); delay(500); color(0,0,0);
   Serial.println("LED: deberias haber visto rojo, verde y azul");
 
-  Wire.begin(21, 22); Wire.setTimeOut(50);
-  Serial.print("I2C encontrados:");
+  Wire.begin(21, 22, 50000); Wire.setTimeOut(50);     // bus 1: BME280 / BME680
+  Wire1.begin(19, 23, 50000); Wire1.setTimeOut(50);   // bus 2: SGP40
+  Serial.print("Bus 1 (21/22):");
   for (uint8_t a = 1; a < 127; a++) { Wire.beginTransmission(a); if (Wire.endTransmission() == 0) Serial.printf(" 0x%02X", a); }
-  Serial.println("   (esperado: 0x59 y 0x76)");
+  Serial.println("   (esperado: 0x76 o 0x77)");
+  Serial.print("Bus 2 (19/23):");
+  for (uint8_t a = 1; a < 127; a++) { Wire1.beginTransmission(a); if (Wire1.endTransmission() == 0) Serial.printf(" 0x%02X", a); }
+  Serial.println("   (esperado: 0x59)");
   bmeOk = bme.begin(0x76) || bme.begin(0x77);
+  if (!bmeOk && (bme680.begin(0x77) || bme680.begin(0x76))) { bmeOk = true; es680 = true; bme680.setGasHeater(320, 150); }
   if (!bmeOk && (bmp.begin(0x76) || bmp.begin(0x77))) { bmeOk = true; esBmp = true; }
-  sgpOk = sgp.begin();
-  Serial.printf("%s: %s   SGP40: %s\n", esBmp ? "BMP280" : "BME280", bmeOk ? "OK" : "FALLA", sgpOk ? "OK" : "FALLA");
+  sgpOk = sgp.begin(&Wire1);
+  Serial.printf("%s: %s   SGP40: %s\n", es680 ? "BME680" : esBmp ? "BMP280" : "BME280", bmeOk ? "OK" : "FALLA", sgpOk ? "OK" : "FALLA");
 
   Serial2.begin(9600, SERIAL_8N1, 25, 26); mhz.begin(Serial2);
   Serial1.begin(9600, SERIAL_8N1, 27, 14); pms.activeMode();
@@ -50,7 +56,8 @@ void loop() {
   if (pms.read(pd)) { pm1 = pd.PM_AE_UG_1_0; pm25 = pd.PM_AE_UG_2_5; pm10 = pd.PM_AE_UG_10_0; }
 
   if (ahora - tSgp >= 1000) { tSgp = ahora;
-    if (bmeOk) { t = esBmp ? bmp.readTemperature() : bme.readTemperature();
+    if (bmeOk && es680) { if (bme680.performReading()) { t = bme680.temperature; h = bme680.humidity; p = bme680.pressure / 100.0; } }
+    else if (bmeOk) { t = esBmp ? bmp.readTemperature() : bme.readTemperature();
                  h = esBmp ? 50 : bme.readHumidity();
                  p = (esBmp ? bmp.readPressure() : bme.readPressure()) / 100.0; }
     if (sgpOk) voc = sgp.measureVocIndex(isnan(t) ? 25 : t, isnan(h) ? 50 : h);

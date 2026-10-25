@@ -29,6 +29,7 @@
 #include <Wire.h>
 #include <Adafruit_BME280.h>
 #include <Adafruit_BMP280.h>   // respaldo: mismo modulo morado con chip BMP280
+#include <Adafruit_BME680.h>   // alternativa: T/H/P + gas en un modulo
 #include <Adafruit_SGP40.h>
 #include <MHZ19.h>
 #include <PMS.h>
@@ -54,7 +55,9 @@ WiFiClient        net;
 PubSubClient      mqtt(net);
 Adafruit_BME280   bme;
 Adafruit_BMP280   bmp(&Wire);
+Adafruit_BME680   bme680(&Wire);
 bool              esBmp = false;   // true si el chip es BMP280 (sin humedad)
+bool              es680 = false;   // true si el modulo es BME680
 Adafruit_SGP40    sgp;
 MHZ19             mhz;
 PMS               pms(Serial1);
@@ -69,6 +72,9 @@ Adafruit_NeoPixel led(LED_COUNT, PIN_LED, NEO_GRB + NEO_KHZ800);
 struct Estado {
   // ultimas lecturas validas (NAN = sin dato valido)
   float co2 = NAN, temp = NAN, hum = NAN, pres = NAN;
+  float tempMhz = NAN;          // respaldo: sensor interno del MH-Z19C
+  float gasKohm = NAN;          // resistencia de gas del BME680 (baja = mas COV)
+  float co2Pend = NAN;          // velocidad de cambio del CO2 (ppm/min)
   // acumuladores para promediar PM2.5 y COV entre envios
   float pmSuma = 0, vocSuma = 0, pm1Suma = 0, pm10Suma = 0;
   uint16_t pmN = 0, vocN = 0;
@@ -109,6 +115,7 @@ void setNum(JsonDocument& d, const char* k, float v, int dec = 1) {
 }
 
 const char* txtPuerta(int8_t v) { return v < 0 ? "desconocido" : (v ? "abierta" : "cerrada"); }
+const char* nombreAmb() { return es680 ? "bme680" : (esBmp ? "bmp280" : "bme280"); }
 
 // Marca de tiempo ISO 8601 con zona horaria; null si aun no hay hora (NTP)
 void setTimestamp(JsonDocument& d) {
@@ -181,9 +188,15 @@ void publicarTelemetria() {
   setNum(d, "pm10_ugm3", st.pmN ? st.pm10Suma / st.pmN : NAN, 1);
   setNum(d, "voc_index", st.vocN ? st.vocSuma / st.vocN : NAN, 0);
   d["n_pm25"] = st.pmN; d["n_voc"] = st.vocN;
-  setNum(d, "temp_c", st.temp, 1);
+  // temperatura: BME si hay; si no, la interna del MH-Z19C como respaldo
+  if (!isnan(st.temp)) { setNum(d, "temp_c", st.temp, 1); d["temp_fuente"] = nombreAmb(); }
+  else if (!isnan(st.tempMhz)) { setNum(d, "temp_c", st.tempMhz, 1); d["temp_fuente"] = "mhz19"; }
+  else { d["temp_c"] = nullptr; d["temp_fuente"] = nullptr; }
   setNum(d, "hum_pct", st.hum, 1);
   setNum(d, "pres_hpa", st.pres, 1);
+  setNum(d, "gas_kohm", st.gasKohm, 1);
+  setNum(d, "co2_ppm_min", st.co2Pend, 1);
+  if (WiFi.status() == WL_CONNECTED) d["rssi_dbm"] = WiFi.RSSI(); else d["rssi_dbm"] = nullptr;
   if (st.ocupacion < 0) d["ocupacion"] = nullptr; else d["ocupacion"] = st.ocupacion;
   d["puerta"] = txtPuerta(st.puerta);
   d["ventana"] = txtPuerta(st.ventana);
@@ -199,6 +212,9 @@ void publicarEstado(bool online) {
   JsonDocument d;
   d["nodo"] = NODE_ID; d["estado"] = online ? "online" : "offline";
   d["ip"] = WiFi.localIP().toString();
+  d["rssi_dbm"] = WiFi.RSSI();
+  d["sensor_amb"] = st.bmeOk ? nombreAmb() : "ninguno";
+  d["sensor_voc"] = st.sgpOk ? "sgp40" : "ninguno";
   d["buffer"] = bufCant;
   String s; serializeJson(d, s);
   mqtt.publish(T_ESTADO, s.c_str(), true);   // retenido
@@ -262,24 +278,44 @@ void conectarMqtt() {
 // =============================================================
 // Recuperacion del bus I2C: si un sensor quedo "agarrando" SDA por un glitch,
 // se liberan las lineas con 9 pulsos de reloj y se reinician los sensores.
-void recuperarI2C() {
-  Serial.println("[I2C] bus bloqueado: recuperando");
-  Wire.end();
-  pinMode(PIN_I2C_SDA, INPUT_PULLUP);
-  pinMode(PIN_I2C_SCL, OUTPUT_OPEN_DRAIN);
+void recuperarBus(TwoWire& w, int sda, int scl) {
+  w.end();
+  pinMode(sda, INPUT_PULLUP);
+  pinMode(scl, OUTPUT_OPEN_DRAIN);
   for (int i = 0; i < 9; i++) {
-    digitalWrite(PIN_I2C_SCL, LOW);  delayMicroseconds(5);
-    digitalWrite(PIN_I2C_SCL, HIGH); delayMicroseconds(5);
+    digitalWrite(scl, LOW);  delayMicroseconds(5);
+    digitalWrite(scl, HIGH); delayMicroseconds(5);
   }
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
-  Wire.setTimeOut(50);
-  st.sgpOk = sgp.begin(&Wire);
+  w.begin(sda, scl, 50000);   // 50 kHz: tolera mejor cables largos y ruido
+  w.setTimeOut(50);
+}
+
+void recuperarI2C() {
+  Serial.println("[I2C] bus del BME bloqueado: recuperando");
+  recuperarBus(Wire, PIN_I2C_SDA, PIN_I2C_SCL);
   publicarEvento("sensor", "bus i2c recuperado");
+}
+
+// El SGP40 va solo en el segundo bus. Si no esta o deja de responder,
+// se reintenta cada 30 s sin afectar al resto del nodo.
+void revisarSgp40() {
+  static uint32_t tReintento = 0;
+  if (st.sgpOk || millis() - tReintento < 30000UL) return;
+  tReintento = millis();
+  recuperarBus(Wire1, PIN_SGP_SDA, PIN_SGP_SCL);
+  st.sgpOk = sgp.begin(&Wire1);
+  if (st.sgpOk) publicarEvento("sensor", "sgp40 detectado");
 }
 
 void leerSgp40() {                       // cada 1 s
   if (!st.sgpOk) return;
   float t = isnan(st.temp) ? 25 : st.temp, h = isnan(st.hum) ? 50 : st.hum;
+  uint16_t crudo = sgp.measureRaw(t, h);
+  if (crudo == 0) {                           // no respondio
+    st.sgpOk = false; st.erroresSensor++;
+    publicarEvento("sensor", "sgp40 sin respuesta");
+    return;
+  }
   int32_t voc = sgp.measureVocIndex(t, h);   // compensado con el BME280
   // durante el aprendizaje inicial el algoritmo devuelve 0
   if (enRango(voc, 1, 500)) { st.vocSuma += voc; st.vocN++; st.vocUltimo = voc; }
@@ -298,7 +334,18 @@ void leerPms() {                          // el sensor emite una trama ~1 s
 void leerCo2() {
   if (millis() - tArranque < T_MHZ_PRECALENTAR_MS) return;   // precalentamiento
   int c = mhz.getCO2();
-  if (mhz.errorCode == RESULT_OK && enRango(c, 350, 5100)) st.co2 = c;
+  if (mhz.errorCode == RESULT_OK && enRango(c, 350, 5100)) {
+    // velocidad de cambio (ppm/min), suavizada para que no salte con el ruido
+    static float cAnt = NAN; static uint32_t tAnt = 0;
+    if (!isnan(cAnt)) {
+      float p = (c - cAnt) / ((millis() - tAnt) / 60000.0f);
+      st.co2Pend = isnan(st.co2Pend) ? p : 0.8f * st.co2Pend + 0.2f * p;
+    }
+    cAnt = c; tAnt = millis();
+    st.co2 = c;
+    float tm = mhz.getTemperature();
+    st.tempMhz = enRango(tm, -10, 60) ? tm + MHZ_T_OFFSET : NAN;
+  }
   else { st.co2 = NAN; st.erroresSensor++; }
 }
 
@@ -308,8 +355,16 @@ void leerCo2() {
 // El modulo GY-BME/PMP280 puede traer chip BME280 (ID 0x60, con humedad)
 // o BMP280 (ID 0x58, sin humedad). Se prueba primero BME y luego BMP.
 void iniciarBme() {
-  esBmp = false;
+  esBmp = false; es680 = false;
   st.bmeOk = bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire);
+  if (!st.bmeOk && (bme680.begin(0x77) || bme680.begin(0x76))) {
+    st.bmeOk = true; es680 = true;
+    bme680.setTemperatureOversampling(BME680_OS_8X);
+    bme680.setHumidityOversampling(BME680_OS_2X);
+    bme680.setPressureOversampling(BME680_OS_4X);
+    bme680.setIIRFilterSize(BME680_FILTER_SIZE_3);
+    bme680.setGasHeater(320, 150);   // 320 C durante 150 ms
+  }
   if (!st.bmeOk && (bmp.begin(0x76) || bmp.begin(0x77))) { st.bmeOk = true; esBmp = true; }
 }
 
@@ -317,17 +372,24 @@ void leerBme() {
   static uint8_t fallos = 0;
   if (!st.bmeOk) { iniciarBme(); if (!st.bmeOk) return; }
   float t, h, p;
-  if (esBmp) { t = bmp.readTemperature(); h = NAN; p = bmp.readPressure() / 100.0f; }
-  else       { t = bme.readTemperature(); h = bme.readHumidity(); p = bme.readPressure() / 100.0f; }
+  if (es680) {
+    if (!bme680.performReading()) { t = h = p = NAN; }
+    else {
+      t = bme680.temperature + BME680_T_OFFSET; h = bme680.humidity; p = bme680.pressure / 100.0f;
+      st.gasKohm = bme680.gas_resistance / 1000.0f;
+    }
+  }
+  else if (esBmp) { t = bmp.readTemperature(); h = NAN; p = bmp.readPressure() / 100.0f; }
+  else            { t = bme.readTemperature(); h = bme.readHumidity(); p = bme.readPressure() / 100.0f; }
   bool valido = enRango(t, -10, 60) && enRango(p, 300, 1100) && (esBmp || enRango(h, 0, 100));
   if (valido) {
     st.temp = t; st.hum = h; st.pres = p; fallos = 0;
   } else {
-    st.temp = st.hum = st.pres = NAN;
+    st.temp = st.hum = st.pres = st.gasKohm = NAN;
     st.erroresSensor++;
     if (++fallos >= 3) {
-      Serial.println("[BME280] lecturas invalidas, reinicializando");
-      publicarEvento("sensor", "bme280 reinicializado");
+      Serial.printf("[%s] lecturas invalidas, reinicializando\n", nombreAmb());
+      publicarEvento("sensor", "sensor ambiental reinicializado");
       recuperarI2C();
       iniciarBme();
       fallos = 0;
@@ -439,11 +501,13 @@ void setup() {
   pinMode(PIN_VENT, OUTPUT); digitalWrite(PIN_VENT, LOW);
   led.begin(); led.setBrightness(LED_BRILLO); led.clear(); led.show();
 
-  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 50000);
   Wire.setTimeOut(50);   // si un sensor no responde, no congela el programa
+  Wire1.begin(PIN_SGP_SDA, PIN_SGP_SCL, 50000);
+  Wire1.setTimeOut(50);
   iniciarBme();
-  st.sgpOk = sgp.begin(&Wire);
-  Serial.printf("%s: %s  SGP40: %s\n", esBmp ? "BMP280" : "BME280", st.bmeOk ? "ok" : "NO", st.sgpOk ? "ok" : "NO");
+  st.sgpOk = sgp.begin(&Wire1);
+  Serial.printf("Ambiental: %s  SGP40: %s\n", st.bmeOk ? nombreAmb() : "NO", st.sgpOk ? "ok" : "NO");
 
   Serial2.begin(9600, SERIAL_8N1, PIN_MHZ_RX, PIN_MHZ_TX);
   mhz.begin(Serial2);
@@ -492,6 +556,7 @@ void loop() {
   leerRf();
 #endif
 
+  revisarSgp40();
   if (ahora - tSgp >= T_SGP40_MS) { tSgp = ahora; leerSgp40(); }
   if (ahora - tCo2 >= (st.ahorro ? T_CO2_AHORRO_MS : T_CO2_NORMAL_MS)) { tCo2 = ahora; leerCo2(); }
   if (ahora - tBme >= (st.ahorro ? T_BME_AHORRO_MS : T_BME_NORMAL_MS)) { tBme = ahora; leerBme(); }

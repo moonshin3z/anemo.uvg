@@ -28,8 +28,10 @@
 #define TZ_INFO      "CST6"            // Guatemala, UTC-6, sin horario de verano
 
 // ---------- Pines (ESP32 de 38 pines) ----------
-#define PIN_I2C_SDA   21   // BME280 + SGP40
+#define PIN_I2C_SDA   21   // bus 1 (Wire): BME280 / BME680
 #define PIN_I2C_SCL   22
+#define PIN_SGP_SDA   19   // bus 2 (Wire1): SGP40 solo, asi si uno falla
+#define PIN_SGP_SCL   23   //                no tumba al otro
 #define PIN_MHZ_RX    25   // ESP32 RX  <- TX del MH-Z19C
 #define PIN_MHZ_TX    26   // ESP32 TX  -> RX del MH-Z19C
 #define PIN_PMS_RX    27   // ESP32 RX  <- TX del PMS5003
@@ -84,6 +86,10 @@
 #define PM25_APAGAR     30.0f
 #define VOC_MODERADO   150.0f   // indice VOC
 #define VOC_MALO       200.0f
+
+// ---------- Ajustes de sensores ----------
+#define BME680_T_OFFSET  -1.0f  // el calentador de gas del BME680 lo calienta un poco
+#define MHZ_T_OFFSET     -2.0f  // temperatura interna del MH-Z19C (solo respaldo)
 
 // ---------- Buffer para cuando no hay broker ----------
 #define BUFFER_MAX 60   // mensajes guardados en RAM (10 min en modo normal)

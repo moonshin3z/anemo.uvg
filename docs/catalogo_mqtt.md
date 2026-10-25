@@ -30,7 +30,7 @@ Proposito: reportar todas las variables medidas y el estado de las salidas.
 ```json
 {"nodo":"nodo01","aula":"aula01","seq":152,"ts":"2026-10-20T09:15:40-06:00","uptime_s":1520,
  "modo":"normal","co2_ppm":1043,"pm1_ugm3":8.1,"pm25_ugm3":12.4,"pm10_ugm3":15.0,"voc_index":118,"n_pm25":10,"n_voc":10,
- "temp_c":24.6,"hum_pct":58.1,"pres_hpa":845.2,"ocupacion":28,"puerta":"cerrada",
+ "temp_c":24.6,"temp_fuente":"bme280","hum_pct":58.1,"pres_hpa":845.2,"gas_kohm":null,"co2_ppm_min":12.5,"rssi_dbm":-61,"ocupacion":28,"puerta":"cerrada",
  "ventana":"abierta","ventilador":true,"vent_modo":"auto","aire":"malo","errores":0,"diferido":false}
 ```
 
@@ -42,7 +42,11 @@ Proposito: reportar todas las variables medidas y el estado de las salidas.
 | `co2_ppm` | entero o null | Ultima lectura valida del MH-Z19C (null en el precalentamiento de 1 min o si falla) |
 | `pm1_ugm3`, `pm25_ugm3`, `pm10_ugm3`, `voc_index` | numero o null | Promedio de las lecturas de 1 s de la ventana de envio |
 | `n_pm25`, `n_voc` | entero | Cantidad de lecturas promediadas (control de calidad) |
-| `temp_c`, `hum_pct`, `pres_hpa` | numero o null | BME280 |
+| `temp_c`, `hum_pct`, `pres_hpa` | numero o null | BME280 (o BME680 / BMP280 si es el modulo instalado) |
+| `temp_fuente` | texto o null | De donde sale `temp_c`: `bme280`, `bme680`, `bmp280` o `mhz19` (respaldo, sensor interno del MH-Z19C) |
+| `gas_kohm` | numero o null | Resistencia de gas del BME680 en kOhm (mas baja = mas COV); null con otros modulos |
+| `co2_ppm_min` | numero o null | Velocidad de cambio del CO2 en ppm/min (suavizada); positiva cuando el aula se carga |
+| `rssi_dbm` | entero o null | Senal Wi-Fi del nodo |
 | `ocupacion` | entero o null | Ultimo aforo recibido por comando |
 | `puerta`, `ventana` | texto | `abierta`, `cerrada` o `desconocido` (sensores 433 MHz) |
 | `ventilador`, `vent_modo` | bool, texto | Estado de la salida y su modo (`auto`, `on`, `off`) |
@@ -72,7 +76,7 @@ Proposito: avisar de inmediato un cambio, sin esperar la siguiente telemetria.
 ## 3. Estado (retenido + Last Will)
 
 ```json
-{"nodo":"nodo01","estado":"online","ip":"192.168.1.60","buffer":0}
+{"nodo":"nodo01","estado":"online","ip":"192.168.1.60","rssi_dbm":-61,"sensor_amb":"bme280","sensor_voc":"sgp40","buffer":0}
 {"nodo":"nodo01","estado":"offline"}
 ```
 El nodo publica `online` al conectar. El broker publica `offline` automaticamente (LWT) si el nodo deja de responder por mas de 1.5 veces el keepalive (15 s, o sea unos 22 s). Al ser retenido, un suscriptor nuevo conoce el estado al instante.

@@ -50,7 +50,7 @@ La Pi usa el Admin SDK, asi que no hace falta abrir reglas de Firestore. Si otro
 ## 3. ESP32
 
 1. Arduino IDE, gestor de placas: URL `https://espressif.github.io/arduino-esp32/package_esp32_index.json`, instalar **esp32 by Espressif**. Placa: **ESP32 Dev Module**. Driver CH340 si la PC no reconoce el puerto.
-2. Gestor de bibliotecas: PubSubClient, ArduinoJson (7.x), Adafruit BME280 Library, Adafruit BMP280 Library, Adafruit SGP40 Sensor, MH-Z19 (Jonathan Dempsey), PMS Library (Mariusz Kacki), rc-switch, Adafruit NeoPixel.
+2. Gestor de bibliotecas: PubSubClient, ArduinoJson (7.x), Adafruit BME280 Library, Adafruit BMP280 Library, Adafruit BME680 Library, Adafruit SGP40 Sensor, MH-Z19 (Jonathan Dempsey), PMS Library (Mariusz Kacki), rc-switch, Adafruit NeoPixel.
 3. Editar `config.h` (Wi-Fi, IP de la Pi, clave de `nodo01`) y subir el programa. Si no entra en modo carga, mantener **BOOT** presionado al empezar la subida.
 4. Monitor serie a 115200: deben salir `BME280: ok  SGP40: ok`, `[MQTT] conectando... ok` y lineas `[TX]`.
 5. **Codigos 433 MHz:** abrir y cerrar cada sensor magnetico, anotar los `[RF] codigo ...` del monitor serie, ponerlos en `config.h` y volver a subir.
