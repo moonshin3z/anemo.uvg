@@ -1,79 +1,37 @@
-# Anemo: Fase 03 (nodo + MQTT + Raspberry Pi + Firebase)
+# Anemo · Integración con AWS
 
-```
-ESP32 (sensores, LED, ventilador)
-   |  Wi-Fi LAN, MQTT 1883
-Raspberry Pi: Mosquitto (broker) + chrony (hora) + suscriptor.py
-   |  SQLite local (siempre)      |  internet (cuando hay)
-   +------------------------------+--> Firebase Firestore
-```
+Código del nodo ESP32, configuración de integración y dashboard ambiental.
 
-## Estructura
+## Archivos
 
-| Archivo | Que es |
-|---|---|
-| `firmware/anemo_nodo/config.h` | Red, broker, pines, umbrales, codigos 433 MHz. Lo unico que se edita |
-| `firmware/anemo_nodo/anemo_nodo.ino` | Firmware del ESP32 |
-| `raspberry/setup_pi.sh` | Instala y configura todo en la Pi |
-| `raspberry/mosquitto/` | Configuracion del broker y permisos (ACL) |
-| `raspberry/suscriptor/suscriptor.py` | Suscriptor: valida, guarda, calcula ACH, sube a Firebase |
-| `raspberry/suscriptor/aforo.py` | Envia comandos al nodo (aforo, modo, ventilador) |
-| `raspberry/suscriptor/simulador_nodo.py` | Nodo falso para probar la Pi sin hardware |
-| `docs/catalogo_mqtt.md` | Catalogo de mensajes y payloads (seccion 6 del informe) |
+- `anemo_nodo/anemo_nodo.ino`: versión de firmware disponible en los archivos de esta conversación. No es una exportación verificada de la última versión cargada en la placa; los ajustes posteriores de diagnóstico compartidos por chat pueden diferir.
+- `anemo_nodo/config.h`: configuración para el SSID `Galaxy S10+a89b`, sin contraseña ni IP de broker predefinida.
+- `aws/greengrass_actualizacion.json`: actualización del MQTT Bridge observada en AWS; no representa toda la configuración efectiva del componente.
+- `aws/regla_dynamodb.json` y `aws/guardar_telemetria.sql`: regla GuardarTelemetriaAnemo y acción DynamoDBv2.
+- `aws/instalar_panel_amigable_anemo.py`: instalador del dashboard entregado durante el proyecto.
+- `aws/lambda/anemo_widget.py`: código de Lambda extraído del mismo instalador.
 
-## 1. Raspberry Pi
+## Arduino IDE
 
-1. Raspberry Pi OS en la misma red Wi-Fi que el nodo. Darle **IP fija** (en el router, o con `sudo nmtui`). Esa IP va en `MQTT_HOST` de `config.h`.
-2. Copiar la carpeta `raspberry/` a la Pi y correr:
-   ```bash
-   cd raspberry && sudo bash setup_pi.sh
-   ```
-   Pide dos claves: `nodo01` (la misma de `config.h`) y `pi_sub`.
-3. Editar `/opt/anemo/.env` (poner la clave de `pi_sub`).
-4. Probar el broker en dos terminales:
-   ```bash
-   mosquitto_sub -h localhost -u pi_sub -P <clave> -t 'anemo/#' -v
-   mosquitto_pub -h localhost -u pi_sub -P <clave> -t anemo/prueba -m hola
-   ```
-5. Arrancar el suscriptor: `sudo systemctl start anemo-suscriptor` y ver `journalctl -u anemo-suscriptor -f`.
-6. Sin hardware: `python3 /opt/anemo/simulador_nodo.py --password <clave nodo01>`.
+Abrir `anemo_nodo/anemo_nodo.ino` y seleccionar ESP32 Dev Module. Instalar PubSubClient, ArduinoJson 7, Adafruit BME280 Library, Adafruit BMP280 Library, Adafruit BME680 Library, Adafruit SGP40 Sensor, MH-Z19 (Jonathan Dempsey), PMS Library (Mariusz Kacki), rc-switch y Adafruit NeoPixel, con sus dependencias.
 
-## 2. Firebase
+Antes de cargar la placa, completar en una copia local de config.h la contraseña WIFI_PASS y la IP actual de la Raspberry Pi en MQTT_HOST. Ambas placas deben alcanzar la misma red local. No publicar esa copia con la contraseña. La IP puede cambiar al cambiar de red. La entrega de este paquete no incluye una nueva compilación ni una prueba física.
 
-1. En console.firebase.google.com: crear proyecto, luego **Firestore Database**, modo produccion, region `us-central1`.
-2. Configuracion del proyecto, **Cuentas de servicio**, "Generar nueva clave privada". Se descarga un JSON.
-3. Copiarlo a la Pi como `/opt/anemo/firebase-key.json` y reiniciar el servicio.
-4. **No subir esa llave a GitHub** (esta en `.gitignore`).
+## Flujo y recursos
 
-La Pi usa el Admin SDK, asi que no hace falta abrir reglas de Firestore. Si otro equipo hace una pagina web que lea los datos, las reglas deben permitir solo lectura.
+ESP32 → Mosquitto en Raspberry Pi → Greengrass MQTT Bridge → AWS IoT Core → DynamoDB. CloudWatch presenta un widget personalizado generado por Lambda a partir de las consultas a DynamoDB.
 
-## 3. ESP32
+- Región: us-east-1
+- Thing: seccion20-equipo4
+- Tema reenviado: anemo/aula01/nodo01/telemetria
+- Tabla: Telemetria_Anemo_equipo4
+- Regla: GuardarTelemetriaAnemo
+- Dashboard: Anemo_Aula01_Equipo04
+- Lambda: customWidgetAnemoAmbiente
+- Rol de Lambda: AnemoDashboardLecturaRole
 
-1. Arduino IDE, gestor de placas: URL `https://espressif.github.io/arduino-esp32/package_esp32_index.json`, instalar **esp32 by Espressif**. Placa: **ESP32 Dev Module**. Driver CH340 si la PC no reconoce el puerto.
-2. Gestor de bibliotecas: PubSubClient, ArduinoJson (7.x), Adafruit BME280 Library, Adafruit BMP280 Library, Adafruit BME680 Library, Adafruit SGP40 Sensor, MH-Z19 (Jonathan Dempsey), PMS Library (Mariusz Kacki), rc-switch, Adafruit NeoPixel.
-3. Editar `config.h` (Wi-Fi, IP de la Pi, clave de `nodo01`) y subir el programa. Si no entra en modo carga, mantener **BOOT** presionado al empezar la subida.
-4. Monitor serie a 115200: deben salir `BME280: ok  SGP40: ok`, `[MQTT] conectando... ok` y lineas `[TX]`.
-5. **Codigos 433 MHz:** abrir y cerrar cada sensor magnetico, anotar los `[RF] codigo ...` del monitor serie, ponerlos en `config.h` y volver a subir.
+El instalador modifica recursos AWS: crea o actualiza la función y su rol, respalda el panel anterior y actualiza su presentación. No hace falta ejecutarlo de nuevo para subir este repositorio.
 
-## 4. Comandos utiles en la Pi
+## Alcance de las pruebas
 
-```bash
-cd /opt/anemo && set -a && . ./.env && set +a
-venv/bin/python aforo.py aforo 28         # ocupacion actual
-venv/bin/python aforo.py modo ahorro      # o normal
-venv/bin/python aforo.py ventilador on    # on | off | auto
-sqlite3 anemo.db "select recibido,seq,latencia_s,obs from mensajes order by id desc limit 10;"
-mosquitto_sub -h localhost -u pi_sub -P <clave> -t 'anemo/+/+/estado' -v   # online/offline
-```
-
-## 5. Pruebas para el informe
-
-| Prueba | Como hacerla | Evidencia |
-|---|---|---|
-| Correspondencia enviado/recibido | Comparar `[TX]` del monitor serie con el log del suscriptor (mismo `seq`) | Capturas lado a lado |
-| Intervalos | `select recibido from mensajes where tipo='telemetria'` y ver diferencias (10 s / 60 s) | Tabla de tiempos |
-| Umbrales | Soplar cerca del MH-Z19C: CO2 > 1000, LED rojo, ventilador on, evento `aire=malo` | Foto + log |
-| Sin internet, con LAN | Desconectar el cable/WAN del router: todo sigue; Firebase muestra "no disponible" y sube al volver | Log + consola de Firebase |
-| Caida del broker | `sudo systemctl stop mosquitto` 1 min y luego `start`: el nodo guarda en buffer, reenvia con `"diferido":true`, sin huecos de `seq` | Log del suscriptor |
-| LWT | Desconectar la energia del ESP32: a los ~22 s aparece `estado: offline` | Captura de `mosquitto_sub` |
-| Comandos | `aforo.py aforo 60` responde `cmd_error`; `aforo.py aforo 25` responde `cmd_ok` | Captura |
+Se observaron lecturas de CO₂, partículas, temperatura, humedad y presión; recepción en AWS IoT Core; almacenamiento en DynamoDB y visualización en el dashboard. Los eventos de puerta y el estado del nodo se verificaron en Mosquitto local. VOC permaneció sin lectura. Una orden de ventilador en telemetría no demuestra por sí sola el movimiento físico del ventilador. No se incluyen certificados, llaves privadas ni credenciales AWS.

@@ -1,0 +1,594 @@
+// =============================================================
+//  Anemo - Nodo IoT de calidad del aire (ESP32)
+//  CC3108 Internet of Things - Proyecto Fase 03
+//
+//  Que hace este programa:
+//   1. Lee CO2 (MH-Z19C), PM2.5 (PMS5003), COV (SGP40),
+//      temperatura/humedad/presion (BME280) y el estado de
+//      puerta y ventana (sensores 433 MHz).
+//   2. Valida las lecturas y promedia PM2.5 y COV en cada ventana
+//      de envio.
+//   3. Controla localmente el LED (estado del aire) y el
+//      ventilador (CO2 o PM2.5 sobre el umbral), aunque no haya red.
+//   4. Publica telemetria y eventos en JSON por MQTT hacia el
+//      broker de la Raspberry Pi y recibe comandos (aforo, modo,
+//      ventilador).
+//   5. Si se pierde el broker, guarda los mensajes en un buffer y
+//      los reenvia al reconectar.
+//
+//  Librerias (Gestor de bibliotecas de Arduino IDE):
+//   PubSubClient (Nick O'Leary), ArduinoJson 7 (Benoit Blanchon),
+//   Adafruit BME280 Library, Adafruit BMP280 Library, Adafruit SGP40 Sensor,
+//   MH-Z19 (Jonathan Dempsey), PMS Library (Mariusz Kacki),
+//   rc-switch (sui77), Adafruit NeoPixel
+//  Placa: "ESP32 Dev Module"
+// =============================================================
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include <Wire.h>
+#include <Adafruit_BME280.h>
+#include <Adafruit_BMP280.h>   // respaldo: mismo modulo morado con chip BMP280
+#include <Adafruit_BME680.h>   // alternativa: T/H/P + gas en un modulo
+#include <Adafruit_SGP40.h>
+#include <MHZ19.h>
+#include <PMS.h>
+#include <RCSwitch.h>
+#include <Adafruit_NeoPixel.h>
+#include <time.h>
+#include <math.h>
+#include "config.h"
+
+// ---------------- Topicos MQTT ----------------
+// anemo/<aula>/<nodo>/<tipo>
+#define BASE_TOPIC "anemo/" AULA_ID "/" NODE_ID
+const char* T_TELEMETRIA = BASE_TOPIC "/telemetria";  // publica
+const char* T_EVENTO     = BASE_TOPIC "/evento";      // publica
+const char* T_ESTADO     = BASE_TOPIC "/estado";      // publica (retenido + LWT)
+const char* T_CMD        = BASE_TOPIC "/cmd/#";       // suscribe
+const char* T_CMD_AFORO  = BASE_TOPIC "/cmd/aforo";
+const char* T_CMD_MODO   = BASE_TOPIC "/cmd/modo";
+const char* T_CMD_VENT   = BASE_TOPIC "/cmd/ventilador";
+
+// ---------------- Objetos ----------------
+WiFiClient        net;
+PubSubClient      mqtt(net);
+Adafruit_BME280   bme;
+Adafruit_BMP280   bmp(&Wire);
+Adafruit_BME680   bme680(&Wire);
+bool              esBmp = false;   // true si el chip es BMP280 (sin humedad)
+bool              es680 = false;   // true si el modulo es BME680
+Adafruit_SGP40    sgp;
+MHZ19             mhz;
+PMS               pms(Serial1);
+PMS::DATA         pmsData;
+RCSwitch          rf;
+#if !PUERTA_CABLEADA && PUERTA_SIMULADA
+RCSwitch          rfTx;           // FS1000A de la puerta simulada
+#endif
+Adafruit_NeoPixel led(LED_COUNT, PIN_LED, NEO_GRB + NEO_KHZ800);
+
+// ---------------- Estado del sistema ----------------
+struct Estado {
+  // ultimas lecturas validas (NAN = sin dato valido)
+  float co2 = NAN, temp = NAN, hum = NAN, pres = NAN;
+  float tempMhz = NAN;          // respaldo: sensor interno del MH-Z19C
+  float gasKohm = NAN;          // resistencia de gas del BME680 (baja = mas COV)
+  float co2Pend = NAN;          // velocidad de cambio del CO2 (ppm/min)
+  // acumuladores para promediar PM2.5 y COV entre envios
+  float pmSuma = 0, vocSuma = 0, pm1Suma = 0, pm10Suma = 0;
+  uint16_t pmN = 0, vocN = 0;
+  float pmUltimo = NAN, vocUltimo = NAN;
+  // entradas digitales / manuales
+  int  ocupacion = -1;          // -1 = sin dato; lo envia la Raspberry Pi
+  int8_t puerta = -1;           // -1 desconocido, 0 cerrada, 1 abierta
+  int8_t ventana = -1;
+  // salidas
+  bool ventilador = false;
+  String ventModo = "auto";     // auto | on | off (comando remoto)
+  String aire = "sin_dato";     // bueno | moderado | malo
+  // operacion
+  bool ahorro = false;
+  uint32_t seq = 0;             // numero de mensaje (detecta perdidas)
+  uint16_t erroresSensor = 0;
+  bool bmeOk = false, sgpOk = false;
+} st;
+
+// ---------------- Buffer offline ----------------
+String buffer[BUFFER_MAX];
+uint8_t bufIni = 0, bufCant = 0;
+
+// ---------------- Temporizadores ----------------
+uint32_t tSgp = 0, tPms = 0, tCo2 = 0, tBme = 0, tTx = 0, tMqtt = 0, tLed = 0;
+uint32_t tArranque = 0;
+bool parpadeo = false;
+
+// =============================================================
+//  Utilidades
+// =============================================================
+bool enRango(float v, float lo, float hi) { return !isnan(v) && v >= lo && v <= hi; }
+
+// Agrega un numero al JSON o null si no hay dato valido
+void setNum(JsonDocument& d, const char* k, float v, int dec = 1) {
+  if (isnan(v)) d[k] = nullptr;
+  else d[k] = roundf(v * powf(10, dec)) / powf(10, dec);
+}
+
+const char* txtPuerta(int8_t v) { return v < 0 ? "desconocido" : (v ? "abierta" : "cerrada"); }
+const char* nombreAmb() { return es680 ? "bme680" : (esBmp ? "bmp280" : "bme280"); }
+
+// Marca de tiempo ISO 8601 con zona horaria; null si aun no hay hora (NTP)
+void setTimestamp(JsonDocument& d) {
+  time_t ahora = time(nullptr);
+  if (ahora > 1700000000) {           // hora ya sincronizada por NTP
+    struct tm tmLocal;
+    localtime_r(&ahora, &tmLocal);
+    char ts[30];
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S-06:00", &tmLocal);
+    d["ts"] = ts;
+  } else {
+    d["ts"] = nullptr;                // la Pi usa su hora de recepcion
+  }
+  d["uptime_s"] = millis() / 1000;
+}
+
+// =============================================================
+//  MQTT: publicar con respaldo en buffer
+// =============================================================
+void guardarEnBuffer(const String& msg) {
+  uint8_t pos = (bufIni + bufCant) % BUFFER_MAX;
+  buffer[pos] = msg;
+  if (bufCant < BUFFER_MAX) bufCant++;
+  else bufIni = (bufIni + 1) % BUFFER_MAX;   // lleno: se descarta el mas viejo
+}
+
+// Cada elemento del buffer guarda "topico\npayload"
+void publicarODiferir(const char* topico, JsonDocument& doc) {
+  doc["diferido"] = !mqtt.connected();
+  String payload;
+  serializeJson(doc, payload);
+  Serial.printf("[TX] %s %s\n", topico, payload.c_str());
+  if (mqtt.connected() && mqtt.publish(topico, payload.c_str())) return;
+  guardarEnBuffer(String(topico) + "\n" + payload);
+}
+
+void vaciarBuffer() {
+  while (bufCant > 0 && mqtt.connected()) {
+    String& item = buffer[bufIni];
+    int sep = item.indexOf('\n');
+    if (!mqtt.publish(item.substring(0, sep).c_str(), item.substring(sep + 1).c_str())) break;
+    bufIni = (bufIni + 1) % BUFFER_MAX;
+    bufCant--;
+    mqtt.loop();
+  }
+  if (bufCant == 0) Serial.println("[MQTT] buffer vaciado");
+}
+
+// =============================================================
+//  Mensajes
+// =============================================================
+void publicarEvento(const char* tipo, const char* detalle) {
+  JsonDocument d;
+  d["nodo"] = NODE_ID; d["aula"] = AULA_ID; d["seq"] = ++st.seq;
+  setTimestamp(d);
+  d["tipo"] = tipo; d["detalle"] = detalle;
+  setNum(d, "co2_ppm", st.co2, 0);
+  publicarODiferir(T_EVENTO, d);
+}
+
+void publicarTelemetria() {
+  JsonDocument d;
+  d["device_id"] = DEVICE_ID;  // Ejercicio 07: clave de particion en AWS
+  d["nodo"] = NODE_ID; d["aula"] = AULA_ID; d["seq"] = ++st.seq;
+  setTimestamp(d);
+  d["modo"] = st.ahorro ? "ahorro" : "normal";
+  setNum(d, "co2_ppm", st.co2, 0);
+  // PM2.5 y COV: promedio de las lecturas de 1 s de esta ventana
+  setNum(d, "pm1_ugm3",  st.pmN ? st.pm1Suma / st.pmN : NAN, 1);
+  setNum(d, "pm25_ugm3", st.pmN ? st.pmSuma / st.pmN : NAN, 1);
+  setNum(d, "pm10_ugm3", st.pmN ? st.pm10Suma / st.pmN : NAN, 1);
+  setNum(d, "voc_index", st.vocN ? st.vocSuma / st.vocN : NAN, 0);
+  d["n_pm25"] = st.pmN; d["n_voc"] = st.vocN;
+  // temperatura: BME si hay; si no, la interna del MH-Z19C como respaldo
+  if (!isnan(st.temp)) { setNum(d, "temp_c", st.temp, 1); d["temp_fuente"] = nombreAmb(); }
+  else if (!isnan(st.tempMhz)) { setNum(d, "temp_c", st.tempMhz, 1); d["temp_fuente"] = "mhz19"; }
+  else { d["temp_c"] = nullptr; d["temp_fuente"] = nullptr; }
+  setNum(d, "hum_pct", st.hum, 1);
+  setNum(d, "pres_hpa", st.pres, 1);
+  setNum(d, "gas_kohm", st.gasKohm, 1);
+  setNum(d, "co2_ppm_min", st.co2Pend, 1);
+  if (WiFi.status() == WL_CONNECTED) d["rssi_dbm"] = WiFi.RSSI(); else d["rssi_dbm"] = nullptr;
+  if (st.ocupacion < 0) d["ocupacion"] = nullptr; else d["ocupacion"] = st.ocupacion;
+  d["puerta"] = txtPuerta(st.puerta);
+  d["ventana"] = txtPuerta(st.ventana);
+  d["ventilador"] = st.ventilador;
+  d["vent_modo"] = st.ventModo;
+  d["aire"] = st.aire;
+  d["errores"] = st.erroresSensor;
+  publicarODiferir(T_TELEMETRIA, d);
+  st.pmSuma = st.pm1Suma = st.pm10Suma = st.vocSuma = 0; st.pmN = st.vocN = 0;   // nueva ventana
+}
+
+void publicarEstado(bool online) {
+  JsonDocument d;
+  d["nodo"] = NODE_ID; d["estado"] = online ? "online" : "offline";
+  d["ip"] = WiFi.localIP().toString();
+  d["rssi_dbm"] = WiFi.RSSI();
+  d["sensor_amb"] = st.bmeOk ? nombreAmb() : "ninguno";
+  d["sensor_voc"] = st.sgpOk ? "sgp40" : "ninguno";
+  d["buffer"] = bufCant;
+  String s; serializeJson(d, s);
+  mqtt.publish(T_ESTADO, s.c_str(), true);   // retenido
+}
+
+// =============================================================
+//  Comandos recibidos desde la Raspberry Pi
+// =============================================================
+void alRecibir(char* topic, byte* payload, unsigned int len) {
+  JsonDocument d;
+  if (deserializeJson(d, payload, len)) { Serial.println("[CMD] JSON invalido"); return; }
+  String t(topic);
+  Serial.printf("[CMD] %s\n", topic);
+
+  if (t == T_CMD_AFORO && d["ocupacion"].is<int>()) {
+    int n = d["ocupacion"];
+    if (n >= 0 && n <= 50) {
+      st.ocupacion = n;
+      publicarEvento("cmd_ok", "aforo actualizado");
+    } else publicarEvento("cmd_error", "aforo fuera de rango 0-50");
+  } else if (t == T_CMD_MODO) {
+    String m = d["modo"] | "";
+    if (m == "ahorro" || m == "normal") {
+      st.ahorro = (m == "ahorro");
+      publicarEvento("cmd_ok", st.ahorro ? "modo ahorro" : "modo normal");
+    } else publicarEvento("cmd_error", "modo invalido (normal|ahorro)");
+  } else if (t == T_CMD_VENT) {
+    String m = d["modo"] | "";
+    if (m == "auto" || m == "on" || m == "off") {
+      st.ventModo = m;
+      publicarEvento("cmd_ok", ("ventilador " + m).c_str());
+    } else publicarEvento("cmd_error", "ventilador invalido (auto|on|off)");
+  } else {
+    publicarEvento("cmd_error", "comando desconocido o mal formado");
+  }
+}
+
+// =============================================================
+//  Conectividad (no bloqueante: el control local sigue corriendo)
+// =============================================================
+void conectarMqtt() {
+  if (WiFi.status() != WL_CONNECTED || mqtt.connected()) return;
+  if (millis() - tMqtt < T_MQTT_RETRY_MS) return;
+  tMqtt = millis();
+  // Last Will: si el nodo se cae, el broker publica "offline" retenido
+  const char* lwt = "{\"nodo\":\"" NODE_ID "\",\"estado\":\"offline\"}";
+  Serial.print("[MQTT] conectando... ");
+  bool conectado;
+  if (MQTT_USE_AUTH) {
+    conectado = mqtt.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS, T_ESTADO, 1, true, lwt);
+  } else {
+    conectado = mqtt.connect(MQTT_CLIENT_ID, T_ESTADO, 1, true, lwt);
+  }
+  if (conectado) {
+    Serial.println("ok");
+    mqtt.subscribe(T_CMD, 1);
+    publicarEstado(true);
+    publicarEvento("conexion", "conectado al broker");
+    vaciarBuffer();
+  } else {
+    Serial.printf("fallo, rc=%d\n", mqtt.state());
+  }
+}
+
+// =============================================================
+//  Lectura de sensores
+// =============================================================
+// Recuperacion del bus I2C: si un sensor quedo "agarrando" SDA por un glitch,
+// se liberan las lineas con 9 pulsos de reloj y se reinician los sensores.
+void recuperarBus(TwoWire& w, int sda, int scl) {
+  w.end();
+  pinMode(sda, INPUT_PULLUP);
+  pinMode(scl, OUTPUT_OPEN_DRAIN);
+  for (int i = 0; i < 9; i++) {
+    digitalWrite(scl, LOW);  delayMicroseconds(5);
+    digitalWrite(scl, HIGH); delayMicroseconds(5);
+  }
+  w.begin(sda, scl, 50000);   // 50 kHz: tolera mejor cables largos y ruido
+  w.setTimeOut(50);
+}
+
+void recuperarI2C() {
+  Serial.println("[I2C] bus del BME bloqueado: recuperando");
+  recuperarBus(Wire, PIN_I2C_SDA, PIN_I2C_SCL);
+  publicarEvento("sensor", "bus i2c recuperado");
+}
+
+// El SGP40 va solo en el segundo bus. Si no esta o deja de responder,
+// se reintenta cada 30 s sin afectar al resto del nodo.
+void revisarSgp40() {
+  static uint32_t tReintento = 0;
+  if (st.sgpOk || millis() - tReintento < 30000UL) return;
+  tReintento = millis();
+  recuperarBus(Wire1, PIN_SGP_SDA, PIN_SGP_SCL);
+  st.sgpOk = sgp.begin(&Wire1);
+  if (st.sgpOk) publicarEvento("sensor", "sgp40 detectado");
+}
+
+void leerSgp40() {                       // cada 1 s
+  if (!st.sgpOk) return;
+  float t = isnan(st.temp) ? 25 : st.temp, h = isnan(st.hum) ? 50 : st.hum;
+  uint16_t crudo = sgp.measureRaw(t, h);
+  if (crudo == 0) {                           // no respondio
+    st.sgpOk = false; st.erroresSensor++;
+    publicarEvento("sensor", "sgp40 sin respuesta");
+    return;
+  }
+  int32_t voc = sgp.measureVocIndex(t, h);   // compensado con el BME280
+  // durante el aprendizaje inicial el algoritmo devuelve 0
+  if (enRango(voc, 1, 500)) { st.vocSuma += voc; st.vocN++; st.vocUltimo = voc; }
+}
+
+void leerPms() {                          // el sensor emite una trama ~1 s
+  if (pms.read(pmsData)) {
+    float pm = pmsData.PM_AE_UG_2_5, pm1 = pmsData.PM_AE_UG_1_0, pm10 = pmsData.PM_AE_UG_10_0;
+    if (enRango(pm, 0, 1000) && enRango(pm1, 0, 1000) && enRango(pm10, 0, 1000)) {
+      st.pmSuma += pm; st.pm1Suma += pm1; st.pm10Suma += pm10; st.pmN++; st.pmUltimo = pm;
+    }
+    else st.erroresSensor++;
+  }
+}
+
+void leerCo2() {
+  if (millis() - tArranque < T_MHZ_PRECALENTAR_MS) return;   // precalentamiento
+  int c = mhz.getCO2();
+  if (mhz.errorCode == RESULT_OK && enRango(c, 350, 5100)) {
+    // velocidad de cambio (ppm/min), suavizada para que no salte con el ruido
+    static float cAnt = NAN; static uint32_t tAnt = 0;
+    if (!isnan(cAnt)) {
+      float p = (c - cAnt) / ((millis() - tAnt) / 60000.0f);
+      st.co2Pend = isnan(st.co2Pend) ? p : 0.8f * st.co2Pend + 0.2f * p;
+    }
+    cAnt = c; tAnt = millis();
+    st.co2 = c;
+    float tm = mhz.getTemperature();
+    st.tempMhz = enRango(tm, -10, 60) ? tm + MHZ_T_OFFSET : NAN;
+  }
+  else { st.co2 = NAN; st.erroresSensor++; }
+}
+
+// Si el BME280 pierde energia un instante se reinicia "dormido" y entrega
+// siempre los mismos valores imposibles (ej. 181.5 C, -155 hPa). En ese caso
+// se descartan TODAS sus lecturas y, tras 3 fallos seguidos, se reinicializa.
+// El modulo GY-BME/PMP280 puede traer chip BME280 (ID 0x60, con humedad)
+// o BMP280 (ID 0x58, sin humedad). Se prueba primero BME y luego BMP.
+void iniciarBme() {
+  esBmp = false; es680 = false;
+  st.bmeOk = bme.begin(0x76, &Wire) || bme.begin(0x77, &Wire);
+  if (!st.bmeOk && (bme680.begin(0x77) || bme680.begin(0x76))) {
+    st.bmeOk = true; es680 = true;
+    bme680.setTemperatureOversampling(BME680_OS_8X);
+    bme680.setHumidityOversampling(BME680_OS_2X);
+    bme680.setPressureOversampling(BME680_OS_4X);
+    bme680.setIIRFilterSize(BME680_FILTER_SIZE_3);
+    bme680.setGasHeater(320, 150);   // 320 C durante 150 ms
+  }
+  if (!st.bmeOk && (bmp.begin(0x76) || bmp.begin(0x77))) { st.bmeOk = true; esBmp = true; }
+}
+
+void leerBme() {
+  static uint8_t fallos = 0;
+  if (!st.bmeOk) { iniciarBme(); if (!st.bmeOk) return; }
+  float t, h, p;
+  if (es680) {
+    if (!bme680.performReading()) { t = h = p = NAN; }
+    else {
+      t = bme680.temperature + BME680_T_OFFSET; h = bme680.humidity; p = bme680.pressure / 100.0f;
+      st.gasKohm = bme680.gas_resistance / 1000.0f;
+    }
+  }
+  else if (esBmp) { t = bmp.readTemperature(); h = NAN; p = bmp.readPressure() / 100.0f; }
+  else            { t = bme.readTemperature(); h = bme.readHumidity(); p = bme.readPressure() / 100.0f; }
+  bool valido = enRango(t, -10, 60) && enRango(p, 300, 1100) && (esBmp || enRango(h, 0, 100));
+  if (valido) {
+    st.temp = t; st.hum = h; st.pres = p; fallos = 0;
+  } else {
+    st.temp = st.hum = st.pres = st.gasKohm = NAN;
+    st.erroresSensor++;
+    if (++fallos >= 3) {
+      Serial.printf("[%s] lecturas invalidas, reinicializando\n", nombreAmb());
+      publicarEvento("sensor", "sensor ambiental reinicializado");
+      recuperarI2C();
+      iniciarBme();
+      fallos = 0;
+    }
+  }
+}
+
+// Sensor de puerta cableado (MC-38): con el iman cerca el contacto se cierra
+// y el pin lee 0 (cerrada); sin iman la resistencia interna lo sube a 1 (abierta).
+// Se exige 50 ms de lectura estable para ignorar rebotes del contacto.
+void leerPuertaCableada() {
+  static int8_t ultimaLectura = -1;
+  static uint32_t tCambio = 0;
+  int8_t lectura = digitalRead(PIN_RF) == HIGH ? 1 : 0;
+  if (lectura != ultimaLectura) { ultimaLectura = lectura; tCambio = millis(); return; }
+  if (millis() - tCambio < 50 || lectura == st.puerta) return;
+  st.puerta = lectura;
+  publicarEvento("puerta", txtPuerta(lectura));
+}
+
+void leerRf() {
+  if (!rf.available()) return;
+  unsigned long c = rf.getReceivedValue();
+  rf.resetAvailable();
+  Serial.printf("[RF] codigo %lu\n", c);   // usar para llenar config.h
+  int8_t p = st.puerta, v = st.ventana;
+  if (c == RF_PUERTA_ABIERTA && c)  p = 1;
+  if (c == RF_PUERTA_CERRADA && c)  p = 0;
+  if (c == RF_VENTANA_ABIERTA && c) v = 1;
+  if (c == RF_VENTANA_CERRADA && c) v = 0;
+  if (p != st.puerta)  { st.puerta = p;  publicarEvento("puerta",  txtPuerta(p)); }
+  if (v != st.ventana) { st.ventana = v; publicarEvento("ventana", txtPuerta(v)); }
+}
+
+#if !PUERTA_CABLEADA && PUERTA_SIMULADA
+// Puerta simulada: lee el cable de PIN_SIM_PUERTA y manda el codigo por 433 MHz.
+// Reenvia cada 30 s por si un paquete se pierde (igual que hacen los sensores reales).
+void simularPuerta() {
+  static int8_t ultima = -1, enviada = -1;
+  static uint32_t tCambio = 0, tEnvio = 0;
+  int8_t l = digitalRead(PIN_SIM_PUERTA) == HIGH ? 1 : 0;   // suelto = abierta
+  if (l != ultima) { ultima = l; tCambio = millis(); return; }
+  if (millis() - tCambio < 50) return;
+  if (l == enviada && millis() - tEnvio < 30000UL) return;
+  enviada = l; tEnvio = millis();
+  rfTx.send(l ? RF_PUERTA_ABIERTA : RF_PUERTA_CERRADA, 24);
+  Serial.printf("[SIM] puerta %s enviada por 433 MHz\n", l ? "abierta" : "cerrada");
+}
+#endif
+
+// =============================================================
+//  Procesamiento local y salidas (funciona sin red)
+// =============================================================
+void actualizarSalidas() {
+  // 1) Clasificacion del aire con el peor de los tres indicadores
+  float pm = st.pmUltimo, voc = st.vocUltimo;
+  String aire = "sin_dato";
+  if (!isnan(st.co2) || !isnan(pm) || !isnan(voc)) {
+    aire = "bueno";
+    if ((st.co2 >= CO2_MODERADO) || (pm >= PM25_MODERADO) || (voc >= VOC_MODERADO)) aire = "moderado";
+    if ((st.co2 >= CO2_MALO) || (pm >= PM25_MALO) || (voc >= VOC_MALO)) aire = "malo";
+  }
+  if (aire != st.aire) { st.aire = aire; publicarEvento("aire", aire.c_str()); }
+
+  // 2) Ventilador con histeresis (o forzado por comando)
+  bool vent = st.ventilador;
+  if (st.ventModo == "on") vent = true;
+  else if (st.ventModo == "off") vent = false;
+  else {
+    bool encender = (st.co2 >= CO2_MALO) || (pm >= PM25_MALO);
+    bool apagar   = (isnan(st.co2) || st.co2 < CO2_APAGAR) && (isnan(pm) || pm < PM25_APAGAR);
+    if (encender) vent = true; else if (apagar) vent = false;
+  }
+  if (vent != st.ventilador) {
+    st.ventilador = vent;
+    digitalWrite(PIN_VENT, vent ? HIGH : LOW);
+    publicarEvento("ventilador", vent ? "encendido" : "apagado");
+  }
+
+  // 3) LED: verde / amarillo / rojo; rojo parpadeante = ventilar
+  //    (aire malo con puerta y ventana cerradas)
+  uint32_t color = led.Color(0, 0, 60);                    // azul: sin dato
+  if (st.aire == "bueno")    color = led.Color(0, 150, 0);
+  if (st.aire == "moderado") color = led.Color(180, 120, 0);
+  if (st.aire == "malo")     color = led.Color(200, 0, 0);
+  // Alerta: aire malo, ninguna abertura conocida esta abierta y al menos una
+  // esta confirmada cerrada (funciona con 1 o 2 sensores magneticos).
+  bool alertaVentilar = st.aire == "malo" && st.puerta != 1 && st.ventana != 1 &&
+                        (st.puerta == 0 || st.ventana == 0);
+  if (alertaVentilar && parpadeo) color = 0;
+  // Se refresca al cambiar el color y, ademas, cada 2 s: si la tira pierde
+  // la alimentacion un instante (ej. al arrancar el ventilador) se apaga y
+  // sin este refresco se quedaria apagada hasta el siguiente cambio de color.
+  // Con el receptor 433 MHz el refresco periodico se omite, porque
+  // led.show() apaga las interrupciones y podria cortar una trama de radio.
+  static uint32_t colorActual = 0xFFFFFFFF, tRefresco = 0;
+  bool refrescar = PUERTA_CABLEADA && millis() - tRefresco >= 2000;
+  if (color == colorActual && !refrescar) return;
+  colorActual = color; tRefresco = millis();
+  for (int i = 0; i < LED_COUNT; i++) led.setPixelColor(i, color);
+  led.show();
+}
+
+// =============================================================
+//  setup / loop
+// =============================================================
+void setup() {
+  Serial.begin(115200);
+  delay(200);
+  Serial.println("\n=== Anemo nodo " NODE_ID " ===");
+  tArranque = millis();
+
+  pinMode(PIN_VENT, OUTPUT); digitalWrite(PIN_VENT, LOW);
+  led.begin(); led.setBrightness(LED_BRILLO); led.clear(); led.show();
+
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, 50000);
+  Wire.setTimeOut(50);   // si un sensor no responde, no congela el programa
+  Wire1.begin(PIN_SGP_SDA, PIN_SGP_SCL, 50000);
+  Wire1.setTimeOut(50);
+  iniciarBme();
+  st.sgpOk = sgp.begin(&Wire1);
+  Serial.printf("Ambiental: %s  SGP40: %s\n", st.bmeOk ? nombreAmb() : "NO", st.sgpOk ? "ok" : "NO");
+
+  Serial2.begin(9600, SERIAL_8N1, PIN_MHZ_RX, PIN_MHZ_TX);
+  mhz.begin(Serial2);
+  mhz.autoCalibration(true);   // ABC: referencia 400 ppm cada 24 h
+
+  Serial1.begin(9600, SERIAL_8N1, PIN_PMS_RX, PIN_PMS_TX);
+  pms.activeMode();
+
+#if PUERTA_CABLEADA
+  pinMode(PIN_RF, INPUT_PULLUP);
+#else
+  rf.enableReceive(digitalPinToInterrupt(PIN_RF));
+  rf.setReceiveTolerance(80);   // receptor MX-RM-5V barato: tolerar pulsos deformados
+#if PUERTA_SIMULADA
+  pinMode(PIN_SIM_PUERTA, INPUT_PULLUP);
+  rfTx.enableTransmit(PIN_RF_TX);
+  rfTx.setRepeatTransmit(8);
+#endif
+#endif
+
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  Serial.printf("[WiFi] SSID=\"%s\"\n", WIFI_SSID);
+  Serial.printf("[MQTT] broker=%s:%d autenticacion=%s\n", MQTT_HOST, MQTT_PORT, MQTT_USE_AUTH ? "usuario" : "anonima");
+  Serial.printf("[AWS] device_id=%s tema=%s\n", DEVICE_ID, T_TELEMETRIA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  configTzTime(TZ_INFO, NTP_SERVER_1, NTP_SERVER_2);
+
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+  mqtt.setCallback(alRecibir);
+  if (!mqtt.setBufferSize(MQTT_BUFFER_BYTES)) {
+    Serial.println("[MQTT] No se pudo reservar el buffer");
+  }
+  mqtt.setSocketTimeout(2);     // no bloquear el control local si el broker no responde
+  mqtt.setKeepAlive(15);
+}
+
+void loop() {
+  uint32_t ahora = millis();
+
+  static int estadoWifiAnterior = -1;
+  int estadoWifi = WiFi.status();
+  if (estadoWifi != estadoWifiAnterior) {
+    estadoWifiAnterior = estadoWifi;
+    if (estadoWifi == WL_CONNECTED) {
+      Serial.printf("[WiFi] conectado IP=%s RSSI=%d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    } else {
+      Serial.printf("[WiFi] estado=%d; esperando conexion\n", estadoWifi);
+    }
+  }
+
+  conectarMqtt();
+  mqtt.loop();
+
+  leerPms();
+#if PUERTA_CABLEADA
+  leerPuertaCableada();
+#else
+#if PUERTA_SIMULADA
+  simularPuerta();
+#endif
+  leerRf();
+#endif
+
+  revisarSgp40();
+  if (ahora - tSgp >= T_SGP40_MS) { tSgp = ahora; leerSgp40(); }
+  if (ahora - tCo2 >= (st.ahorro ? T_CO2_AHORRO_MS : T_CO2_NORMAL_MS)) { tCo2 = ahora; leerCo2(); }
+  if (ahora - tBme >= (st.ahorro ? T_BME_AHORRO_MS : T_BME_NORMAL_MS)) { tBme = ahora; leerBme(); }
+
+  if (ahora - tLed >= 500) { tLed = ahora; parpadeo = !parpadeo; actualizarSalidas(); }
+
+  if (ahora - tTx >= (st.ahorro ? T_TX_AHORRO_MS : T_TX_NORMAL_MS)) { tTx = ahora; publicarTelemetria(); }
+}

@@ -1,0 +1,12 @@
+{
+  "reset": [],
+  "merge": {
+    "mqttTopicMapping": {
+      "AnemoTelemetriaANube": {
+        "topic": "anemo/aula01/nodo01/telemetria",
+        "source": "LocalMqtt",
+        "target": "IotCore"
+      }
+    }
+  }
+}

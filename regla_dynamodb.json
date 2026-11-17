@@ -1,0 +1,16 @@
+{
+  "sql": "SELECT *, timestamp() AS timestamp FROM 'anemo/aula01/nodo01/telemetria'",
+  "awsIotSqlVersion": "2016-03-23",
+  "ruleDisabled": false,
+  "description": "Guarda toda la telemetria Anemo, incluso con sensores sin dato.",
+  "actions": [
+    {
+      "dynamoDBv2": {
+        "putItem": {
+          "tableName": "Telemetria_Anemo_equipo4"
+        },
+        "roleArn": "arn:aws:iam::803817393393:role/service-role/AnemoIoTDynamoRole"
+      }
+    }
+  ]
+}
